@@ -34,3 +34,23 @@ Three different solving schemes are provided:
 </p>
 
 ### Representative results
+1. The combined effects of displacement-controlled shear load and thermal load:
+<p align="center">
+<img src="./doc/figure1.png" width="450">
+</p>
+
+2. Quenching test:
+<p align="center">
+<img src="./doc/figure2.png" width="450">
+</p>
+
+3. $L_2$-projection based adaptive mesh refinement
+<p align="center">
+<img src="./doc/figure3.png" width="450">
+</p>
+
+4. Comparison of the computational costs associated with the three solving schemes:
+<p align="center">
+<img src="./doc/tab1.png" width="800">
+</p>
+
