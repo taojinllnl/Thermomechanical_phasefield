@@ -6,8 +6,8 @@ This repository provides the source code and the input files for the numerical e
 <p align="center">
 <img src="./doc/eq1.png" width="350">
 </p>
-
-Three different solving schemes are provided:
+which are used to solve for the displacement field, the temperature field, and the phase-field. Three different solving schemes are provided:
 1. L-BFGS monolithic scheme
+
 2. Fully staggered scheme
 3. partially staggered scheme
