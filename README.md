@@ -4,10 +4,10 @@ This repository provides three solving schemes for the thermomechanically couple
 ### Purpose
 This repository provides the source code and the input files for the numerical examples used in the paper titled “Fully staggered, partially staggered, and monolithic schemes for thermomechanically coupled phase-field crack simulations: solver development and performance evaluation”. The tightly coupled governing equations are listed below
 <p align="center">
-<img src="./doc/eq1.png" width="350"><img src="./doc/Tension_test_step_15.png" width="250">
+<img src="./doc/eq1.png" width="350">
 </p>
-
-Three different solving schemes are provided:
+which are used to solve for the displacement field, the temperature field, and the phase-field. Three different solving schemes are provided:
 1. L-BFGS monolithic scheme
+
 2. Fully staggered scheme
 3. partially staggered scheme
