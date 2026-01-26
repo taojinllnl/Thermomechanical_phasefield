@@ -97,3 +97,5 @@ void assemble_system_rhs_BFGS_one_cell(
 <img src="./doc/tab1.png" width="800">
 </p>
 
+### How to cite this work
+TBD...
