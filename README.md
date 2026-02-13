@@ -10,10 +10,15 @@ which are used to solve for the displacement field, the temperature field, and t
 <p align="center">
 <img src="./doc/eq3.png" width="300">
 </p>
-and the material thermal conductivity is degraded by the phase-field:
+the material thermal conductivity is degraded by the phase-field:
 <p align="center">
 <img src="./doc/eq2.png" width="300">
 </p>
+and the thermomechanical coupling term is degraded by the phase-field:
+<p align="center">
+<img src="./doc/eq7.png" width="225">
+</p>
+where α is the thermal expansion coefficient and K is the material bulk modulus.
 
 
 Three different solving schemes are provided:
