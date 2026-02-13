@@ -4168,8 +4168,12 @@ namespace PhaseField_monolithic
         const double lame_mu                 = lqph[q_point]->get_lame_mu();
         const bool   coupling_on_heat_eq     = lqph[q_point]->get_heat_coupling_flag();
 
+        const double phasefield_value        = lqph[q_point]->get_phase_field_value();
+        const Tensor<1, dim> phasefield_grad = lqph[q_point]->get_phase_field_gradient();
+
         double coupling_tensor_coeff = thermal_expansion
-             * (trace(Physics::Elasticity::StandardTensors<dim>::I)*lame_lambda + 2.0*lame_mu);
+             * (trace(Physics::Elasticity::StandardTensors<dim>::I)*lame_lambda + 2.0*lame_mu)
+	     * degradation_function(phasefield_value);
 
         if (!coupling_on_heat_eq)
           coupling_tensor_coeff = 0.0;
@@ -4180,9 +4184,6 @@ namespace PhaseField_monolithic
 	double history_value = history_strain_energy;
 	if (current_positive_strain_energy > history_strain_energy)
 	  history_value = current_positive_strain_energy;
-
-	const double phasefield_value        = lqph[q_point]->get_phase_field_value();
-	const Tensor<1, dim> phasefield_grad = lqph[q_point]->get_phase_field_gradient();
 
 	const double temperature_value        = lqph[q_point]->get_temperature_value();
 
@@ -4480,7 +4481,7 @@ namespace PhaseField_monolithic
 
     double delta_alpha_new;
 
-    unsigned int ls_max = 10;
+    unsigned int ls_max = 50;
 
     for (unsigned int i = 1; i <= ls_max; ++i)
       {
@@ -4493,7 +4494,7 @@ namespace PhaseField_monolithic
 
         if (i == ls_max)
           {
-            alpha = 1.0;
+            alpha = 1.0e-3;
             break;
           }
 
@@ -4511,7 +4512,7 @@ namespace PhaseField_monolithic
       }
 
     if (alpha < 1.0e-3)
-      alpha = 1.0;
+      alpha = 1.0e-3;
 
     return alpha;
   }
