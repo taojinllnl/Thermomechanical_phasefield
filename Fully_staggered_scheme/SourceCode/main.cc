@@ -3668,9 +3668,11 @@ namespace PhaseField_T_and_u_and_d
         const double lame_lambda             = lqph[q_point]->get_lame_lambda();
         const double lame_mu                 = lqph[q_point]->get_lame_mu();
         const bool   coupling_on_heat_eq     = lqph[q_point]->get_heat_coupling_flag();
+        const double phasefield_value        = lqph[q_point]->get_phase_field_value();
 
         double coupling_tensor_coeff = thermal_expansion
-             * (trace(Physics::Elasticity::StandardTensors<dim>::I)*lame_lambda + 2.0*lame_mu);
+             * (trace(Physics::Elasticity::StandardTensors<dim>::I)*lame_lambda + 2.0*lame_mu)
+	     * degradation_function(phasefield_value);
 
         if (!coupling_on_heat_eq)
           coupling_tensor_coeff = 0.0;
@@ -3971,9 +3973,11 @@ namespace PhaseField_T_and_u_and_d
         const double lame_lambda             = lqph[q_point]->get_lame_lambda();
         const double lame_mu                 = lqph[q_point]->get_lame_mu();
         const bool   coupling_on_heat_eq     = lqph[q_point]->get_heat_coupling_flag();
+        const double phasefield_value        = lqph[q_point]->get_phase_field_value();
 
         double coupling_tensor_coeff = thermal_expansion
-             * (trace(Physics::Elasticity::StandardTensors<dim>::I)*lame_lambda + 2.0*lame_mu);
+             * (trace(Physics::Elasticity::StandardTensors<dim>::I)*lame_lambda + 2.0*lame_mu)
+	     * degradation_function(phasefield_value);
 
         if (!coupling_on_heat_eq)
           coupling_tensor_coeff = 0.0;
