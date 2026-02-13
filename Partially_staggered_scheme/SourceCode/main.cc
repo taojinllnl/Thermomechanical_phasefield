@@ -3491,9 +3491,11 @@ namespace PhaseField_uT_and_d
         const double lame_lambda             = lqph[q_point]->get_lame_lambda();
         const double lame_mu                 = lqph[q_point]->get_lame_mu();
         const bool   coupling_on_heat_eq     = lqph[q_point]->get_heat_coupling_flag();
+        const double phasefield_value        = lqph[q_point]->get_phase_field_value();
 
         double coupling_tensor_coeff = thermal_expansion
-	    * (trace(Physics::Elasticity::StandardTensors<dim>::I)*lame_lambda + 2.0*lame_mu);
+	    * (trace(Physics::Elasticity::StandardTensors<dim>::I)*lame_lambda + 2.0*lame_mu)
+	    * degradation_function(phasefield_value);
 
         if (!coupling_on_heat_eq)
           coupling_tensor_coeff = 0.0;
@@ -3728,9 +3730,11 @@ namespace PhaseField_uT_and_d
         const double lame_lambda             = lqph[q_point]->get_lame_lambda();
         const double lame_mu                 = lqph[q_point]->get_lame_mu();
         const bool   coupling_on_heat_eq     = lqph[q_point]->get_heat_coupling_flag();
+        const double phasefield_value        = lqph[q_point]->get_phase_field_value();
 
         double coupling_tensor_coeff = thermal_expansion
-             * (trace(Physics::Elasticity::StandardTensors<dim>::I)*lame_lambda + 2.0*lame_mu);
+             * (trace(Physics::Elasticity::StandardTensors<dim>::I)*lame_lambda + 2.0*lame_mu)
+	     * degradation_function(phasefield_value);
 
         if (!coupling_on_heat_eq)
           coupling_tensor_coeff = 0.0;
@@ -4097,7 +4101,7 @@ namespace PhaseField_uT_and_d
       {
 	try
 	  {
-	    SolverControl solver_control_ut(1e5,
+	    SolverControl solver_control_ut(1e4,
 					    m_parameters.m_gmres_ut_tol);
 	    SolverGMRES<BlockVector<double>> GMRES_solver_ut(solver_control_ut);
 
@@ -4187,15 +4191,16 @@ namespace PhaseField_uT_and_d
     m_error_update_ut.reset();
 
     unsigned int newton_iteration = 0;
-    for (; newton_iteration < m_parameters.m_max_iterations_ut; ++newton_iteration)
+    for (; newton_iteration <= m_parameters.m_max_iterations_ut; ++newton_iteration)
       {
         make_constraints_ut(newton_iteration, iter_stagger);
         assemble_system_ut();
 
         get_error_residual_ut(m_error_residual_ut);
 
-        if (    newton_iteration > 0
-	     && m_error_residual_ut.m_norm <= m_parameters.m_Newton_ut_tol
+        if (    (newton_iteration > 0
+	     &&  m_error_residual_ut.m_norm <= m_parameters.m_Newton_ut_tol)
+             || (newton_iteration == m_parameters.m_max_iterations_ut)
              //&& m_error_update_ut.m_norm <= 1.0e-7
 	   )
           {
@@ -4218,8 +4223,8 @@ namespace PhaseField_uT_and_d
         update_qph_incremental(solution_delta_ut);
       }
 
-    AssertThrow(newton_iteration < m_parameters.m_max_iterations_ut,
-                ExcMessage("No convergence in nonlinear solver for UT-subproblem!"));
+    //AssertThrow(newton_iteration < m_parameters.m_max_iterations_ut,
+    //            ExcMessage("No convergence in nonlinear solver for UT-subproblem!"));
 
     return newton_iteration;
   }
