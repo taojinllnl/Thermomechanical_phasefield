@@ -33,7 +33,7 @@ Three different solving schemes are provided:
 <img src="./doc/eq6.png" width="450">
 </p>
 
-3. partially staggered scheme, which partitions the coupled problem into a displacement-temperature sub-problem and a phase-field sub-problem:
+3. Partially staggered scheme, which partitions the coupled problem into a displacement-temperature sub-problem and a phase-field sub-problem:
 <p align="center">
 <img src="./doc/eq5.png" width="450">
 </p>
