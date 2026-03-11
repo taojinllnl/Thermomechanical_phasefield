@@ -2723,12 +2723,12 @@ namespace PhaseField_monolithic
 
     double const length = 25.0; //mm
     double const width  = 5.0;  //mm
-    double const thickness = 0.25;  //mm
+    double const thickness = 1.0;  //mm
 
     std::vector<unsigned int> repetitions(dim, 1);
     repetitions[0] = 100;
     repetitions[1] = 20;
-    repetitions[2] = 1;
+    repetitions[2] = 4;
 
     GridGenerator::subdivided_hyper_rectangle(m_triangulation,
 					      repetitions,
@@ -2774,6 +2774,8 @@ namespace PhaseField_monolithic
 	      {
 		if (   (cell->center()[0] >  0.0 && cell->center()[0] <  0.13)
 		    || (cell->center()[1] >  0.0 && cell->center()[1] <  0.13)
+		    || (cell->center()[2] >  0.0 && cell->center()[2] <  0.13)
+		    || (cell->center()[2] >  0.87 && cell->center()[2] <  1.0)
 		    )
 		  {
 		    // Because the mesh is not imported from gmsh, there is no
@@ -3327,8 +3329,8 @@ namespace PhaseField_monolithic
 	  {
 	    if (   (std::fabs(item.second[0] -  0.0) < 1.0e-9)
 		|| (std::fabs(item.second[1] -  0.0) < 1.0e-9)
-		//|| (std::fabs(item.second[2] -  0.0) < 1.0e-9)
-		//|| (std::fabs(item.second[2] -  0.25) < 1.0e-9)
+		|| (std::fabs(item.second[2] -  0.0) < 1.0e-9)
+		|| (std::fabs(item.second[2] -  1.0) < 1.0e-9)
 		)
 	      {
 		m_solution(item.first) = cool_down_temperature;
@@ -3715,7 +3717,7 @@ namespace PhaseField_monolithic
 	      {
 		if (   (std::fabs(vertex_itr->vertex()[0] -  0.0) < 1.0e-9)
 		    && (std::fabs(vertex_itr->vertex()[1] -  0.0) < 1.0e-9)
-		    && (std::fabs(vertex_itr->vertex()[2] -0.125) < 1.0e-9) )
+		    && (std::fabs(vertex_itr->vertex()[2] -  0.5) < 1.0e-9) )
 		  {
 		    node_xy = usr_utilities::get_vertex_dofs(vertex_itr, m_dof_handler);
 		  }
@@ -3727,7 +3729,7 @@ namespace PhaseField_monolithic
 	      {
 		if (   (std::fabs(vertex_itr->vertex()[0] - 25.0) < 1.0e-9)
 		    && (std::fabs(vertex_itr->vertex()[1] -  0.0) < 1.0e-9)
-		    && (std::fabs(vertex_itr->vertex()[2] -0.125) < 1.0e-9) )
+		    && (std::fabs(vertex_itr->vertex()[2] -  0.5) < 1.0e-9) )
 		  {
 		    node_xy = usr_utilities::get_vertex_dofs(vertex_itr, m_dof_handler);
 		  }
@@ -3739,7 +3741,7 @@ namespace PhaseField_monolithic
 	      {
 		if (   (std::fabs(vertex_itr->vertex()[0] -  0.0) < 1.0e-9)
 		    && (std::fabs(vertex_itr->vertex()[1] -  5.0) < 1.0e-9)
-		    && (std::fabs(vertex_itr->vertex()[2] -0.125) < 1.0e-9) )
+		    && (std::fabs(vertex_itr->vertex()[2] -  0.5) < 1.0e-9) )
 		  {
 		    node_xy = usr_utilities::get_vertex_dofs(vertex_itr, m_dof_handler);
 		  }
@@ -3761,6 +3763,22 @@ namespace PhaseField_monolithic
 	    const int boundary_id_front_surface = 1;
 	    VectorTools::interpolate_boundary_values(m_dof_handler,
 						     boundary_id_front_surface,
+						     Functions::ConstantFunction<dim>(
+						       delta_temperature, m_n_components),
+						     m_constraints,
+						     m_fe.component_mask(temperature));
+
+	    const int boundary_id_bottom_surface = 2;
+	    VectorTools::interpolate_boundary_values(m_dof_handler,
+						     boundary_id_bottom_surface,
+						     Functions::ConstantFunction<dim>(
+						       delta_temperature, m_n_components),
+						     m_constraints,
+						     m_fe.component_mask(temperature));
+
+	    const int boundary_id_top_surface = 5;
+	    VectorTools::interpolate_boundary_values(m_dof_handler,
+						     boundary_id_top_surface,
 						     Functions::ConstantFunction<dim>(
 						       delta_temperature, m_n_components),
 						     m_constraints,
@@ -5817,7 +5835,10 @@ namespace PhaseField_monolithic
 	    dof_handler_L2.distribute_dofs(fe_L2);
 	    AffineConstraints<double> constraints;
 	    constraints.clear();
-	    DoFTools::make_hanging_node_constraints(dof_handler_L2, constraints);
+	    //Since we use discontinuous Lagrange polynomials as shape functions
+	    //we don't need to worry about enforcing continuity of the history variable
+	    //at hanging nodes.
+	    //DoFTools::make_hanging_node_constraints(dof_handler_L2, constraints);
 	    constraints.close();
 
 	    Vector<double> old_history_variable_field_L2;
@@ -5846,7 +5867,10 @@ namespace PhaseField_monolithic
 
 	    dof_handler_L2.distribute_dofs(fe_L2);
 	    constraints.clear();
-	    DoFTools::make_hanging_node_constraints(dof_handler_L2, constraints);
+	    //Since we use discontinuous Lagrange polynomials as shape functions
+	    //we don't need to worry about enforcing continuity of the history variable
+	    //at hanging nodes.
+	    //DoFTools::make_hanging_node_constraints(dof_handler_L2, constraints);
 	    constraints.close();
 
 	    std::vector<BlockVector<double>> tmp_solutions(2);
@@ -5879,7 +5903,10 @@ namespace PhaseField_monolithic
 	    // hanging node constraints
 	    m_constraints.distribute(solution_next_step);
 	    m_constraints.distribute(m_solution);
-	    constraints.distribute(new_history_variable_field_L2);
+	    //Since we use discontinuous Lagrange polynomials as shape functions
+	    //we don't need to worry about enforcing continuity of the history variable
+	    //at hanging nodes.
+	    //constraints.distribute(new_history_variable_field_L2);
 
             // new_history_variable_field_L2 contains the history variable projected
             // onto the newly refined mesh
@@ -5912,11 +5939,13 @@ namespace PhaseField_monolithic
     if (!mesh_is_same)
       {
 	BlockVector<double> temp_solution_delta(m_dofs_per_block);
-	BlockVector<double> temp_previous_solution(m_dofs_per_block);
 	temp_solution_delta = 0.0;
-	temp_previous_solution = 0.0;
-	update_qph_incremental(temp_solution_delta, temp_previous_solution, false);
-	update_history_field_step();
+	update_qph_incremental(temp_solution_delta, m_solution, false);
+	//Since we want to map the history variable in the previous time step
+	//from the coarse mesh to the refined mesh, we should not update them here.
+	//update_history_field_step();
+
+	m_logfile << "\t\tUpdate field variables" << std::endl;
 
 	// initial guess for the resolve on the refined mesh
 	LBFGS_update_refine = solution_next_step - m_solution;
