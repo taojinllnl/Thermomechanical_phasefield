@@ -180,6 +180,7 @@ namespace PhaseField_monolithic
       bool m_output_iteration_history;
       bool m_coupling_on_heat_eq;
       bool m_degrade_conductivity;
+      bool m_plane_stress;
       std::string m_type_nonlinear_solver;
       std::string m_type_linear_solver;
       double m_cg_u_tol;
@@ -229,6 +230,11 @@ namespace PhaseField_monolithic
 			  "yes",
                           Patterns::Selection("yes|no"),
 			  "Degrade thermal conductivity or not?");
+
+        prm.declare_entry("Plane stress",
+			  "no",
+			  Patterns::Selection("yes|no"),
+			  "If it is 2D, is it plane-stress?");
 
         prm.declare_entry("Nonlinear solver type",
                           "LBFGS",
@@ -324,6 +330,7 @@ namespace PhaseField_monolithic
         m_output_iteration_history = prm.get_bool("Output iteration history");
         m_coupling_on_heat_eq = prm.get_bool("Coupling on heat equation");
         m_degrade_conductivity = prm.get_bool("Degrade thermal conductivity");
+        m_plane_stress = prm.get_bool("Plane stress");
         m_type_nonlinear_solver = prm.get("Nonlinear solver type");
         m_type_linear_solver = prm.get("Linear solver type");
         m_cg_u_tol = prm.get_double("CG u tolerance");
@@ -704,7 +711,8 @@ namespace PhaseField_monolithic
 					   const double reference_temperature,
 					   const double max_temperature,
 					   const double b_1,
-					   const double b_2)
+					   const double b_2,
+					   const bool   plane_stress_flag)
       : m_lame_lambda(lame_lambda)
       , m_lame_mu(lame_mu)
       , m_residual_k(residual_k)
@@ -718,6 +726,7 @@ namespace PhaseField_monolithic
       , m_max_t(max_temperature)
       , m_b_1(b_1)
       , m_b_2(b_2)
+      , m_plane_stress(plane_stress_flag)
       , m_phase_field_value(0.0)
       , m_grad_phasefield(Tensor<1, dim>())
       , m_strain(SymmetricTensor<2, dim>())
@@ -885,10 +894,19 @@ namespace PhaseField_monolithic
       SymmetricTensor<2, dim> stress_positive, stress_negative;
       const double degradation = degradation_function(m_phase_field_value);
       const double I_1 = trace(strain_e);
-      stress_positive = m_lame_lambda * usr_spectrum_decomposition::positive_ramp_function(I_1)
+
+      // 2D plane strain and 3D cases
+      double my_lambda = m_lame_lambda;
+
+      // 2D plane stress case
+      if (    dim == 2
+  	 && m_plane_stress)
+        my_lambda = 2 * m_lame_mu * m_lame_lambda / (m_lame_lambda + 2 * m_lame_mu);
+
+      stress_positive = my_lambda * usr_spectrum_decomposition::positive_ramp_function(I_1)
                                       * Physics::Elasticity::StandardTensors<dim>::I
                       + 2 * m_lame_mu * strain_positive;
-      stress_negative = m_lame_lambda * usr_spectrum_decomposition::negative_ramp_function(I_1)
+      stress_negative = my_lambda * usr_spectrum_decomposition::negative_ramp_function(I_1)
                                       * Physics::Elasticity::StandardTensors<dim>::I
       		      + 2 * m_lame_mu * strain_negative;
 
@@ -896,19 +914,19 @@ namespace PhaseField_monolithic
       m_stress_positive = stress_positive;
 
       SymmetricTensor<4, dim> C_positive, C_negative;
-      C_positive = m_lame_lambda * usr_spectrum_decomposition::heaviside_function(I_1)
+      C_positive = my_lambda * usr_spectrum_decomposition::heaviside_function(I_1)
                                  * Physics::Elasticity::StandardTensors<dim>::IxI
 		 + 2 * m_lame_mu * projector_positive;
-      C_negative = m_lame_lambda * usr_spectrum_decomposition::heaviside_function(-I_1)
+      C_negative = my_lambda * usr_spectrum_decomposition::heaviside_function(-I_1)
                                  * Physics::Elasticity::StandardTensors<dim>::IxI
       		 + 2 * m_lame_mu * projector_negative;
       m_mechanical_C = degradation * C_positive + C_negative;
 
-      m_strain_energy_positive = 0.5 * m_lame_lambda * usr_spectrum_decomposition::positive_ramp_function(I_1)
+      m_strain_energy_positive = 0.5 * my_lambda * usr_spectrum_decomposition::positive_ramp_function(I_1)
                                                      * usr_spectrum_decomposition::positive_ramp_function(I_1)
                                + m_lame_mu * strain_positive * strain_positive;
 
-      m_strain_energy_negative = 0.5 * m_lame_lambda * usr_spectrum_decomposition::negative_ramp_function(I_1)
+      m_strain_energy_negative = 0.5 * my_lambda * usr_spectrum_decomposition::negative_ramp_function(I_1)
                                                      * usr_spectrum_decomposition::negative_ramp_function(I_1)
                                + m_lame_mu * strain_negative * strain_negative;
 
@@ -949,6 +967,7 @@ namespace PhaseField_monolithic
     const double m_max_t;
     const double m_b_1;
     const double m_b_2;
+    const bool m_plane_stress;
     double m_phase_field_value;
     Tensor<1, dim> m_grad_phasefield;
     SymmetricTensor<2, dim> m_strain;
@@ -996,7 +1015,8 @@ namespace PhaseField_monolithic
 		   const double max_temperature,
 		   const double b_1,
 		   const double b_2,
-		   const bool   coupling_on_heat_eq)
+		   const bool   coupling_on_heat_eq,
+		   const bool   plane_stress_flag)
     {
       m_material =
               std::make_shared<LinearIsotropicElasticityAdditiveSplit<dim>>(lame_lambda,
@@ -1011,7 +1031,8 @@ namespace PhaseField_monolithic
 									    reference_temperature,
 									    max_temperature,
 									    b_1,
-									    b_2);
+									    b_2,
+									    plane_stress_flag);
       m_history_max_positive_strain_energy = 0.0;
       m_length_scale = length_scale;
       m_viscosity = viscosity;
@@ -1630,7 +1651,8 @@ namespace PhaseField_monolithic
 				   heat_capacity, thermal_conductivity_0,
 				   thermal_expansion_coeff, reference_temperature,
 				   max_temperature, b_1, b_2,
-				   m_parameters.m_coupling_on_heat_eq);
+				   m_parameters.m_coupling_on_heat_eq,
+				   m_parameters.m_plane_stress);
       }
   }
 
@@ -5966,6 +5988,14 @@ namespace PhaseField_monolithic
 	      << m_parameters.m_coupling_on_heat_eq << std::endl;
     m_logfile << "Is the thermal conductivity degraded by phasefield? = " << std::boolalpha
     	      << m_parameters.m_degrade_conductivity << std::endl;
+
+    if (dim == 2)
+      {
+	if (m_parameters.m_plane_stress)
+	  m_logfile << "2D plane-stress case" << std::endl;
+	else
+	  m_logfile << "2D plane-strain case" << std::endl;
+      }
 
     m_logfile << "Nonlinear solver type = " << m_parameters.m_type_nonlinear_solver << std::endl;
     m_logfile << "Linear solver type = " << m_parameters.m_type_linear_solver << std::endl;
