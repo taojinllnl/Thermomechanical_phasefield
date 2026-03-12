@@ -4800,7 +4800,10 @@ namespace PhaseField_uT_and_d
 	    dof_handler_L2.distribute_dofs(fe_L2);
 	    AffineConstraints<double> constraints;
 	    constraints.clear();
-	    DoFTools::make_hanging_node_constraints(dof_handler_L2, constraints);
+	    //Since we use discontinuous Lagrange polynomials as shape functions
+	    //we don't need to worry about enforcing continuity of the history variable
+	    //at hanging nodes.
+	    //DoFTools::make_hanging_node_constraints(dof_handler_L2, constraints);
 	    constraints.close();
 
 	    Vector<double> old_history_variable_field_L2;
@@ -4831,7 +4834,10 @@ namespace PhaseField_uT_and_d
 
 	    dof_handler_L2.distribute_dofs(fe_L2);
 	    constraints.clear();
-	    DoFTools::make_hanging_node_constraints(dof_handler_L2, constraints);
+	    //Since we use discontinuous Lagrange polynomials as shape functions
+	    //we don't need to worry about enforcing continuity of the history variable
+	    //at hanging nodes.
+	    //DoFTools::make_hanging_node_constraints(dof_handler_L2, constraints);
 	    constraints.close();
 
 	    BlockVector<double> tmp_solution_previous_ut;
@@ -4877,7 +4883,10 @@ namespace PhaseField_uT_and_d
 	    m_constraints_ut.distribute(m_solution_previous_ut);
 	    m_constraints_d.distribute(m_solution_previous_d);
 	    m_constraints_d.distribute(m_solution_d);
-	    constraints.distribute(new_history_variable_field_L2);
+	    //Since we use discontinuous Lagrange polynomials as shape functions
+	    //we don't need to worry about enforcing continuity of the history variable
+	    //at hanging nodes.
+	    //constraints.distribute(new_history_variable_field_L2);
 
             // new_history_variable_field_L2 contains the history variable projected
             // onto the newly refined mesh
@@ -4915,7 +4924,11 @@ namespace PhaseField_uT_and_d
 	BlockVector<double> solution_delta_ut(m_dofs_per_block_ut);
 	solution_delta_ut = 0.0;
 	update_qph_incremental(solution_delta_ut);
-	update_history_field_step();
+	m_logfile << "\t\tUpdate field variables" << std::endl;
+
+	//Since we want to map the history variable in the previous time step
+	//from the coarse mesh to the refined mesh, we should not update them here.
+	//update_history_field_step();
       }
 
     return mesh_is_same;
