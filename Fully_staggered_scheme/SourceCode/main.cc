@@ -181,6 +181,7 @@ namespace PhaseField_T_and_u_and_d
       bool m_output_iteration_history;
       bool m_coupling_on_heat_eq;
       bool m_degrade_conductivity;
+      bool m_plane_stress;
       std::string m_type_nonlinear_solver;
       std::string m_type_linear_solver;
       std::string m_refinement_strategy;
@@ -226,6 +227,11 @@ namespace PhaseField_T_and_u_and_d
 			  "yes",
                           Patterns::Selection("yes|no"),
 			  "Degrade thermal conductivity or not?");
+
+        prm.declare_entry("Plane stress",
+			  "no",
+			  Patterns::Selection("yes|no"),
+			  "If it is 2D, is it plane-stress?");
 
         prm.declare_entry("Nonlinear solver type",
                           "Newton",
@@ -301,6 +307,7 @@ namespace PhaseField_T_and_u_and_d
         m_output_iteration_history = prm.get_bool("Output iteration history");
         m_coupling_on_heat_eq = prm.get_bool("Coupling on heat equation");
         m_degrade_conductivity = prm.get_bool("Degrade thermal conductivity");
+        m_plane_stress = prm.get_bool("Plane stress");
         m_type_nonlinear_solver = prm.get("Nonlinear solver type");
         m_type_linear_solver = prm.get("Linear solver type");
         m_refinement_strategy = prm.get("Mesh refinement strategy");
@@ -677,7 +684,8 @@ namespace PhaseField_T_and_u_and_d
 					   const double reference_temperature,
 					   const double max_temperature,
 					   const double b_1,
-					   const double b_2)
+					   const double b_2,
+					   const bool   plane_stress_flag)
       : m_lame_lambda(lame_lambda)
       , m_lame_mu(lame_mu)
       , m_residual_k(residual_k)
@@ -691,6 +699,7 @@ namespace PhaseField_T_and_u_and_d
       , m_max_t(max_temperature)
       , m_b_1(b_1)
       , m_b_2(b_2)
+      , m_plane_stress(plane_stress_flag)
       , m_phase_field_value(0.0)
       , m_grad_phasefield(Tensor<1, dim>())
       , m_strain(SymmetricTensor<2, dim>())
@@ -815,98 +824,7 @@ namespace PhaseField_T_and_u_and_d
 			      const double delta_time,
 			      const double temperature,
 			      const Tensor<1, dim> & grad_temperature,
-			      const bool degrade_conductivity_or_not)
-    {
-      // Total strain grad^{(s)}u
-      m_strain = strain;
-      m_phase_field_value = phase_field_value;
-      m_grad_phasefield = grad_phasefield;
-      m_temperature = temperature;
-      m_grad_temperature = grad_temperature;
-
-      // Thermal strain
-      SymmetricTensor<2, dim> strain_t;
-      strain_t = m_alpha * (temperature - m_ref_t)
-	                 * Physics::Elasticity::StandardTensors<dim>::I;
-
-      // Effective strain
-      SymmetricTensor<2, dim> strain_e;
-      strain_e = m_strain - strain_t;
-
-      // temperature-dependent gc
-      double term_1 = (temperature - m_ref_t) / m_max_t;
-      double coeff = 1.0 - m_b_1 * term_1
-	                 + m_b_2 * term_1 * term_1;
-      m_gc_t = coeff * m_gc_0;
-
-      Vector<double>              eigenvalues(dim);
-      std::vector<Tensor<1, dim>> eigenvectors(dim);
-      usr_spectrum_decomposition::spectrum_decomposition<dim>(strain_e,
-    							      eigenvalues,
-    							      eigenvectors);
-
-      SymmetricTensor<2, dim> strain_positive, strain_negative;
-      strain_positive = usr_spectrum_decomposition::positive_tensor(eigenvalues, eigenvectors);
-      strain_negative = usr_spectrum_decomposition::negative_tensor(eigenvalues, eigenvectors);
-
-      SymmetricTensor<4, dim> projector_positive, projector_negative;
-      usr_spectrum_decomposition::positive_negative_projectors(eigenvalues,
-    							       eigenvectors,
-							       projector_positive,
-							       projector_negative);
-
-      SymmetricTensor<2, dim> stress_positive, stress_negative;
-      const double degradation = degradation_function(m_phase_field_value);
-      const double I_1 = trace(strain_e);
-      stress_positive = m_lame_lambda * usr_spectrum_decomposition::positive_ramp_function(I_1)
-                                      * Physics::Elasticity::StandardTensors<dim>::I
-                      + 2 * m_lame_mu * strain_positive;
-      stress_negative = m_lame_lambda * usr_spectrum_decomposition::negative_ramp_function(I_1)
-                                      * Physics::Elasticity::StandardTensors<dim>::I
-      		      + 2 * m_lame_mu * strain_negative;
-
-      m_stress = degradation * stress_positive + stress_negative;
-      m_stress_positive = stress_positive;
-
-      SymmetricTensor<4, dim> C_positive, C_negative;
-      C_positive = m_lame_lambda * usr_spectrum_decomposition::heaviside_function(I_1)
-                                 * Physics::Elasticity::StandardTensors<dim>::IxI
-		 + 2 * m_lame_mu * projector_positive;
-      C_negative = m_lame_lambda * usr_spectrum_decomposition::heaviside_function(-I_1)
-                                 * Physics::Elasticity::StandardTensors<dim>::IxI
-      		 + 2 * m_lame_mu * projector_negative;
-      m_mechanical_C = degradation * C_positive + C_negative;
-
-      m_strain_energy_positive = 0.5 * m_lame_lambda * usr_spectrum_decomposition::positive_ramp_function(I_1)
-                                                     * usr_spectrum_decomposition::positive_ramp_function(I_1)
-                               + m_lame_mu * strain_positive * strain_positive;
-
-      m_strain_energy_negative = 0.5 * m_lame_lambda * usr_spectrum_decomposition::negative_ramp_function(I_1)
-                                                     * usr_spectrum_decomposition::negative_ramp_function(I_1)
-                               + m_lame_mu * strain_negative * strain_negative;
-
-      m_strain_energy_total = degradation * m_strain_energy_positive + m_strain_energy_negative;
-
-      // The critical energy release rate m_gc should be temperature-dependent.
-      m_crack_energy_dissipation = m_gc_t * (  0.5 / m_length_scale * m_phase_field_value * m_phase_field_value
-	                                   + 0.5 * m_length_scale * m_grad_phasefield * m_grad_phasefield)
-	                                   // the term due to viscosity regularization
-	                                   + (m_phase_field_value - phase_field_value_previous_step)
-					   * (m_phase_field_value - phase_field_value_previous_step)
-				           * 0.5 * m_eta / delta_time;
-
-      // degraded thermal conductivity or not
-      if (degrade_conductivity_or_not)
-        m_kappa_d = (degradation + m_residual_k) * m_kappa_0;
-      else
-	m_kappa_d = 1.0 * m_kappa_0;
-
-      // heat flux
-      m_heat_flux = - m_kappa_d * grad_temperature;
-
-      //(void)delta_time;
-      //(void)phase_field_value_previous_step;
-    }
+			      const bool degrade_conductivity_or_not);
 
   private:
     const double m_lame_lambda;
@@ -922,6 +840,7 @@ namespace PhaseField_T_and_u_and_d
     const double m_max_t;
     const double m_b_1;
     const double m_b_2;
+    const bool m_plane_stress;
     double m_phase_field_value;
     Tensor<1, dim> m_grad_phasefield;
     SymmetricTensor<2, dim> m_strain;
@@ -941,6 +860,116 @@ namespace PhaseField_T_and_u_and_d
     Tensor<1, dim> m_heat_flux;
   };
 
+  template <int dim>
+  void LinearIsotropicElasticityAdditiveSplit<dim>::
+    update_material_data(const SymmetricTensor<2, dim> & strain,
+			 const double phase_field_value,
+			 const Tensor<1, dim> & grad_phasefield,
+			 const double phase_field_value_previous_step,
+			 const double delta_time,
+			 const double temperature,
+			 const Tensor<1, dim> & grad_temperature,
+			 const bool degrade_conductivity_or_not)
+  {
+    // Total strain grad^{(s)}u
+    m_strain = strain;
+    m_phase_field_value = phase_field_value;
+    m_grad_phasefield = grad_phasefield;
+    m_temperature = temperature;
+    m_grad_temperature = grad_temperature;
+
+    // Thermal strain
+    SymmetricTensor<2, dim> strain_t;
+    strain_t = m_alpha * (temperature - m_ref_t)
+	                 * Physics::Elasticity::StandardTensors<dim>::I;
+
+    // Effective strain
+    SymmetricTensor<2, dim> strain_e;
+    strain_e = m_strain - strain_t;
+
+    // temperature-dependent gc
+    double term_1 = (temperature - m_ref_t) / m_max_t;
+    double coeff = 1.0 - m_b_1 * term_1
+	                 + m_b_2 * term_1 * term_1;
+    m_gc_t = coeff * m_gc_0;
+
+    Vector<double>              eigenvalues(dim);
+    std::vector<Tensor<1, dim>> eigenvectors(dim);
+    usr_spectrum_decomposition::spectrum_decomposition<dim>(strain_e,
+  							      eigenvalues,
+  							      eigenvectors);
+
+    SymmetricTensor<2, dim> strain_positive, strain_negative;
+    strain_positive = usr_spectrum_decomposition::positive_tensor(eigenvalues, eigenvectors);
+    strain_negative = usr_spectrum_decomposition::negative_tensor(eigenvalues, eigenvectors);
+
+    SymmetricTensor<4, dim> projector_positive, projector_negative;
+    usr_spectrum_decomposition::positive_negative_projectors(eigenvalues,
+  							       eigenvectors,
+							       projector_positive,
+							       projector_negative);
+
+    SymmetricTensor<2, dim> stress_positive, stress_negative;
+    const double degradation = degradation_function(m_phase_field_value);
+    const double I_1 = trace(strain_e);
+
+    // 2D plane strain and 3D cases
+    double my_lambda = m_lame_lambda;
+
+    // 2D plane stress case
+    if (    dim == 2
+	 && m_plane_stress)
+      my_lambda = 2 * m_lame_mu * m_lame_lambda / (m_lame_lambda + 2 * m_lame_mu);
+
+    stress_positive = my_lambda * usr_spectrum_decomposition::positive_ramp_function(I_1)
+                                    * Physics::Elasticity::StandardTensors<dim>::I
+                    + 2 * m_lame_mu * strain_positive;
+    stress_negative = my_lambda * usr_spectrum_decomposition::negative_ramp_function(I_1)
+                                    * Physics::Elasticity::StandardTensors<dim>::I
+    		      + 2 * m_lame_mu * strain_negative;
+
+    m_stress = degradation * stress_positive + stress_negative;
+    m_stress_positive = stress_positive;
+
+    SymmetricTensor<4, dim> C_positive, C_negative;
+    C_positive = my_lambda * usr_spectrum_decomposition::heaviside_function(I_1)
+                               * Physics::Elasticity::StandardTensors<dim>::IxI
+		 + 2 * m_lame_mu * projector_positive;
+    C_negative = my_lambda * usr_spectrum_decomposition::heaviside_function(-I_1)
+                               * Physics::Elasticity::StandardTensors<dim>::IxI
+    		 + 2 * m_lame_mu * projector_negative;
+    m_mechanical_C = degradation * C_positive + C_negative;
+
+    m_strain_energy_positive = 0.5 * my_lambda * usr_spectrum_decomposition::positive_ramp_function(I_1)
+                                                   * usr_spectrum_decomposition::positive_ramp_function(I_1)
+                             + m_lame_mu * strain_positive * strain_positive;
+
+    m_strain_energy_negative = 0.5 * my_lambda * usr_spectrum_decomposition::negative_ramp_function(I_1)
+                                                   * usr_spectrum_decomposition::negative_ramp_function(I_1)
+                             + m_lame_mu * strain_negative * strain_negative;
+
+    m_strain_energy_total = degradation * m_strain_energy_positive + m_strain_energy_negative;
+
+    // The critical energy release rate m_gc should be temperature-dependent.
+    m_crack_energy_dissipation = m_gc_t * (  0.5 / m_length_scale * m_phase_field_value * m_phase_field_value
+	                                   + 0.5 * m_length_scale * m_grad_phasefield * m_grad_phasefield)
+	                                   // the term due to viscosity regularization
+	                                   + (m_phase_field_value - phase_field_value_previous_step)
+					   * (m_phase_field_value - phase_field_value_previous_step)
+				           * 0.5 * m_eta / delta_time;
+
+    // degraded thermal conductivity or not
+    if (degrade_conductivity_or_not)
+      m_kappa_d = (degradation + m_residual_k) * m_kappa_0;
+    else
+	m_kappa_d = 1.0 * m_kappa_0;
+
+    // heat flux
+    m_heat_flux = - m_kappa_d * grad_temperature;
+
+    //(void)delta_time;
+    //(void)phase_field_value_previous_step;
+  }
 
   template <int dim>
   class PointHistory
@@ -969,7 +998,8 @@ namespace PhaseField_T_and_u_and_d
 		   const double max_temperature,
 		   const double b_1,
 		   const double b_2,
-		   const bool   coupling_on_heat_eq)
+		   const bool   coupling_on_heat_eq,
+		   const bool   plane_stress_flag)
     {
       m_material =
               std::make_shared<LinearIsotropicElasticityAdditiveSplit<dim>>(lame_lambda,
@@ -984,7 +1014,8 @@ namespace PhaseField_T_and_u_and_d
 									    reference_temperature,
 									    max_temperature,
 									    b_1,
-									    b_2);
+									    b_2,
+									    plane_stress_flag);
       m_history_max_positive_strain_energy = 0.0;
       m_length_scale = length_scale;
       m_viscosity = viscosity;
@@ -1531,7 +1562,8 @@ namespace PhaseField_T_and_u_and_d
 				   heat_capacity, thermal_conductivity_0,
 				   thermal_expansion_coeff, reference_temperature,
 				   max_temperature, b_1, b_2,
-				   m_parameters.m_coupling_on_heat_eq);
+				   m_parameters.m_coupling_on_heat_eq,
+				   m_parameters.m_plane_stress);
       }
   }
 
@@ -4847,6 +4879,15 @@ namespace PhaseField_T_and_u_and_d
 	      << m_parameters.m_coupling_on_heat_eq << std::endl;
     m_logfile << "Is the thermal conductivity degraded by phasefield? = " << std::boolalpha
     	      << m_parameters.m_degrade_conductivity << std::endl;
+
+    if (dim == 2)
+      {
+	if (m_parameters.m_plane_stress)
+	  m_logfile << "2D plane-stress case" << std::endl;
+	else
+	  m_logfile << "2D plane-strain case" << std::endl;
+      }
+
     m_logfile << "Nonlinear solver type for the mechanical (u) subproblem = "
 	      << m_parameters.m_type_nonlinear_solver << std::endl;
     m_logfile << "Linear solver type = " << m_parameters.m_type_linear_solver << std::endl;
@@ -4955,7 +4996,10 @@ namespace PhaseField_T_and_u_and_d
 	    dof_handler_L2.distribute_dofs(fe_L2);
 	    AffineConstraints<double> constraints;
 	    constraints.clear();
-	    DoFTools::make_hanging_node_constraints(dof_handler_L2, constraints);
+	    //Since we use discontinuous Lagrange polynomials as shape functions
+	    //we don't need to worry about enforcing continuity of the history variable
+	    //at hanging nodes.
+	    //DoFTools::make_hanging_node_constraints(dof_handler_L2, constraints);
 	    constraints.close();
 
 	    Vector<double> old_history_variable_field_L2;
@@ -4988,7 +5032,10 @@ namespace PhaseField_T_and_u_and_d
 
 	    dof_handler_L2.distribute_dofs(fe_L2);
 	    constraints.clear();
-	    DoFTools::make_hanging_node_constraints(dof_handler_L2, constraints);
+	    //Since we use discontinuous Lagrange polynomials as shape functions
+	    //we don't need to worry about enforcing continuity of the history variable
+	    //at hanging nodes.
+	    //DoFTools::make_hanging_node_constraints(dof_handler_L2, constraints);
 	    constraints.close();
 
 	    Vector<double> tmp_solution_previous_u;
@@ -5046,7 +5093,10 @@ namespace PhaseField_T_and_u_and_d
 	    m_constraints_d.distribute(m_solution_previous_d);
 	    m_constraints_d.distribute(m_solution_d);
 	    m_constraints_t.distribute(m_solution_previous_t);
-	    constraints.distribute(new_history_variable_field_L2);
+	    //Since we use discontinuous Lagrange polynomials as shape functions
+	    //we don't need to worry about enforcing continuity of the history variable
+	    //at hanging nodes.
+	    //constraints.distribute(new_history_variable_field_L2);
 
 	    // new_history_variable_field_L2 contains the history variable projected
 	    // onto the newly refined mesh
@@ -5085,7 +5135,12 @@ namespace PhaseField_T_and_u_and_d
 	Vector<double> solution_delta_u(m_dof_handler_u.n_dofs());
 	solution_delta_u = 0.0;
 	update_qph_incremental(solution_delta_u);
-	update_history_field_step();
+
+	m_logfile << "\t\tUpdate field variables" << std::endl;
+
+	//Since we want to map the history variable in the previous time step
+	//from the coarse mesh to the refined mesh, we should not update them here.
+	//update_history_field_step();
       }
 
     return mesh_is_same;

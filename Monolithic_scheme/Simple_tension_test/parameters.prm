@@ -22,6 +22,9 @@ subsection Scenario
   # Is the thermal conductivity degraded by phasefield? (yes or no)
   set Degrade thermal conductivity = yes
 
+  # If it is 2D, is it plane-stress? (yes or no)
+  set Plane stress = yes
+
   # Nonlinear solver type (LBFGS)
   set Nonlinear solver type = LBFGS
 
