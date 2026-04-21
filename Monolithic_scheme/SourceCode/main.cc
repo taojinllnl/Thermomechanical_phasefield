@@ -86,6 +86,12 @@
 #include <deal.II/lac/precondition_selector.h>
 #include <deal.II/lac/solver_selector.h>
 #include <deal.II/lac/sparse_direct.h>
+#include <deal.II/lac/sparse_ilu.h>
+
+#include <deal.II/lac/petsc_precondition.h>
+#include <deal.II/lac/petsc_solver.h>
+#include <deal.II/lac/petsc_vector.h>
+#include <deal.II/lac/petsc_sparse_matrix.h>
 
 #include <deal.II/numerics/error_estimator.h>
 
@@ -105,7 +111,6 @@
 
 #include "SpectrumDecomposition.h"
 #include "Utilities.h"
-
 
 namespace PhaseField_monolithic
 {
@@ -183,6 +188,7 @@ namespace PhaseField_monolithic
       bool m_plane_stress;
       std::string m_type_nonlinear_solver;
       std::string m_type_linear_solver;
+      std::string m_type_preconditioner;
       double m_cg_u_tol;
       double m_cg_d_tol;
       double m_cg_t_tol;
@@ -245,6 +251,11 @@ namespace PhaseField_monolithic
                           "Direct",
                           Patterns::Selection("Direct|CG"),
                           "Type of solver used to solve the linear system B0");
+
+        prm.declare_entry("Preconditioner type for CG",
+			  "Jacobi",
+			  Patterns::Selection("None|Jacobi|SSOR|ILU|AMG"),
+			  "Type of preconditioner used to solve the linear system");
 
         prm.declare_entry("CG u tolerance",
 			  "1.0e-9",
@@ -333,6 +344,7 @@ namespace PhaseField_monolithic
         m_plane_stress = prm.get_bool("Plane stress");
         m_type_nonlinear_solver = prm.get("Nonlinear solver type");
         m_type_linear_solver = prm.get("Linear solver type");
+        m_type_preconditioner = prm.get("Preconditioner type for CG");
         m_cg_u_tol = prm.get_double("CG u tolerance");
         m_cg_d_tol = prm.get_double("CG d tolerance");
         m_cg_t_tol = prm.get_double("CG T tolerance");
@@ -4934,32 +4946,130 @@ namespace PhaseField_monolithic
 	SolverControl            solver_control_uu(1e6, m_parameters.m_cg_u_tol);
 	SolverCG<Vector<double>> cg_uu(solver_control_uu);
 
-	PreconditionJacobi<SparseMatrix<double>> preconditioner_uu;
-	preconditioner_uu.initialize(m_tangent_matrix.block(m_u_dof, m_u_dof), 1.0);
-	cg_uu.solve(m_tangent_matrix.block(m_u_dof, m_u_dof),
-	            LBFGS_r_vector.block(m_u_dof),
-	            LBFGS_q_vector.block(m_u_dof),
-	            preconditioner_uu);
-
 	SolverControl            solver_control_dd(1e6, m_parameters.m_cg_d_tol);
 	SolverCG<Vector<double>> cg_dd(solver_control_dd);
-
-	PreconditionJacobi<SparseMatrix<double>> preconditioner_dd;
-	preconditioner_dd.initialize(m_tangent_matrix.block(m_d_dof, m_d_dof), 1.0);
-	cg_dd.solve(m_tangent_matrix.block(m_d_dof, m_d_dof),
-	            LBFGS_r_vector.block(m_d_dof),
-	            LBFGS_q_vector.block(m_d_dof),
-	            preconditioner_dd);
 
 	SolverControl            solver_control_tt(1e6, m_parameters.m_cg_t_tol);
 	SolverCG<Vector<double>> cg_tt(solver_control_tt);
 
-	PreconditionJacobi<SparseMatrix<double>> preconditioner_tt;
-	preconditioner_tt.initialize(m_tangent_matrix.block(m_t_dof, m_t_dof), 1.0);
-	cg_tt.solve(m_tangent_matrix.block(m_t_dof, m_t_dof),
-	            LBFGS_r_vector.block(m_t_dof),
-	            LBFGS_q_vector.block(m_t_dof),
-	            preconditioner_tt);
+	if (m_parameters.m_type_preconditioner == "None")
+	  {
+	    cg_uu.solve(m_tangent_matrix.block(m_u_dof, m_u_dof),
+			LBFGS_r_vector.block(m_u_dof),
+			LBFGS_q_vector.block(m_u_dof),
+			PreconditionIdentity());
+
+	    cg_dd.solve(m_tangent_matrix.block(m_d_dof, m_d_dof),
+			LBFGS_r_vector.block(m_d_dof),
+			LBFGS_q_vector.block(m_d_dof),
+			PreconditionIdentity());
+
+	    cg_tt.solve(m_tangent_matrix.block(m_t_dof, m_t_dof),
+			LBFGS_r_vector.block(m_t_dof),
+			LBFGS_q_vector.block(m_t_dof),
+			PreconditionIdentity());
+	  }
+	else if (m_parameters.m_type_preconditioner == "Jacobi")
+	  {
+	    PreconditionJacobi<SparseMatrix<double>> preconditioner_uu;
+	    preconditioner_uu.initialize(m_tangent_matrix.block(m_u_dof, m_u_dof), 1.0);
+	    cg_uu.solve(m_tangent_matrix.block(m_u_dof, m_u_dof),
+			LBFGS_r_vector.block(m_u_dof),
+			LBFGS_q_vector.block(m_u_dof),
+			preconditioner_uu);
+
+	    PreconditionJacobi<SparseMatrix<double>> preconditioner_dd;
+	    preconditioner_dd.initialize(m_tangent_matrix.block(m_d_dof, m_d_dof), 1.0);
+	    cg_dd.solve(m_tangent_matrix.block(m_d_dof, m_d_dof),
+			LBFGS_r_vector.block(m_d_dof),
+			LBFGS_q_vector.block(m_d_dof),
+			preconditioner_dd);
+
+	    PreconditionJacobi<SparseMatrix<double>> preconditioner_tt;
+	    preconditioner_tt.initialize(m_tangent_matrix.block(m_t_dof, m_t_dof), 1.0);
+	    cg_tt.solve(m_tangent_matrix.block(m_t_dof, m_t_dof),
+			LBFGS_r_vector.block(m_t_dof),
+			LBFGS_q_vector.block(m_t_dof),
+			preconditioner_tt);
+	  }
+	else if (m_parameters.m_type_preconditioner == "SSOR")
+	  {
+	    PreconditionSSOR<SparseMatrix<double>> preconditioner_uu;
+	    preconditioner_uu.initialize(m_tangent_matrix.block(m_u_dof, m_u_dof), 1.2);
+	    cg_uu.solve(m_tangent_matrix.block(m_u_dof, m_u_dof),
+			LBFGS_r_vector.block(m_u_dof),
+			LBFGS_q_vector.block(m_u_dof),
+			preconditioner_uu);
+
+	    PreconditionSSOR<SparseMatrix<double>> preconditioner_dd;
+	    preconditioner_dd.initialize(m_tangent_matrix.block(m_d_dof, m_d_dof), 1.2);
+	    cg_dd.solve(m_tangent_matrix.block(m_d_dof, m_d_dof),
+			LBFGS_r_vector.block(m_d_dof),
+			LBFGS_q_vector.block(m_d_dof),
+			preconditioner_dd);
+
+	    PreconditionSSOR<SparseMatrix<double>> preconditioner_tt;
+	    preconditioner_tt.initialize(m_tangent_matrix.block(m_t_dof, m_t_dof), 1.2);
+	    cg_tt.solve(m_tangent_matrix.block(m_t_dof, m_t_dof),
+			LBFGS_r_vector.block(m_t_dof),
+			LBFGS_q_vector.block(m_t_dof),
+			preconditioner_tt);
+	  }
+	else if (m_parameters.m_type_preconditioner == "ILU")
+	  {
+            SparseILU<double> preconditioner_uu;
+	    preconditioner_uu.initialize(m_tangent_matrix.block(m_u_dof, m_u_dof));
+	    cg_uu.solve(m_tangent_matrix.block(m_u_dof, m_u_dof),
+			LBFGS_r_vector.block(m_u_dof),
+			LBFGS_q_vector.block(m_u_dof),
+			preconditioner_uu);
+
+	    SparseILU<double> preconditioner_dd;
+	    preconditioner_dd.initialize(m_tangent_matrix.block(m_d_dof, m_d_dof));
+	    cg_dd.solve(m_tangent_matrix.block(m_d_dof, m_d_dof),
+			LBFGS_r_vector.block(m_d_dof),
+			LBFGS_q_vector.block(m_d_dof),
+			preconditioner_dd);
+
+	    SparseILU<double> preconditioner_tt;
+	    preconditioner_tt.initialize(m_tangent_matrix.block(m_t_dof, m_t_dof));
+	    cg_tt.solve(m_tangent_matrix.block(m_t_dof, m_t_dof),
+			LBFGS_r_vector.block(m_t_dof),
+			LBFGS_q_vector.block(m_t_dof),
+			preconditioner_tt);
+	  }
+	else if (m_parameters.m_type_preconditioner == "AMG")
+	  {
+	    /*
+	    PETScWrappers::PreconditionBoomerAMG::AdditionalData data;
+	    data.symmetric_operator = true;   // for CG / SPD systems
+	    data.strong_threshold = 0.25;
+
+	    PETScWrappers::SparseMatrix petsc_matrix_uu;
+	    petsc_matrix_uu.reinit(m_sparsity_pattern.block(m_u_dof, m_u_dof));
+
+	    for (unsigned int i = 0; i < m_tangent_matrix.block(m_u_dof, m_u_dof).m(); ++i)
+	      for (auto entry = m_tangent_matrix.block(m_u_dof, m_u_dof).begin(i);
+	           entry != m_tangent_matrix.block(m_u_dof, m_u_dof).end(i);
+	           ++entry)
+		petsc_matrix_uu.set(i, entry->column(), entry->value());
+
+	    petsc_matrix_uu.compress(VectorOperation::add);
+
+	    PETScWrappers::PreconditionBoomerAMG preconditioner_AMG_uu;
+	    preconditioner_AMG_uu.initialize(petsc_matrix_uu, data);
+
+	    PETScWrappers::Vector petsc_vector_q(LBFGS_q_vector.block(m_u_dof));
+	    PETScWrappers::Vector petsc_vector_r(LBFGS_r_vector.block(m_u_dof).size());
+
+	    PETScWrappers::SolverCG solver_uu(solver_control_uu);
+
+	    solver_uu.solve(petsc_matrix_uu,
+			    petsc_vector_r,
+			    petsc_vector_q,
+			    preconditioner_AMG_uu);
+			    */
+	  }
       }
     else
       {
@@ -6018,6 +6128,8 @@ namespace PhaseField_monolithic
 		  << m_parameters.m_cg_d_tol << std::endl;
 	m_logfile << "\tCG tolerance for inverse K_TT = "
 		  << m_parameters.m_cg_t_tol << std::endl;
+	m_logfile << "\tPreconditioner type for linear solver (CG) = "
+	          << m_parameters.m_type_preconditioner << std::endl;
       }
 
     m_logfile << "Mesh refinement strategy = " << m_parameters.m_refinement_strategy << std::endl;
