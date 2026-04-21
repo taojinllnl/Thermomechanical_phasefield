@@ -189,6 +189,7 @@ namespace PhaseField_monolithic
       std::string m_type_nonlinear_solver;
       std::string m_type_linear_solver;
       std::string m_type_preconditioner;
+      double m_ssor_parameter;
       double m_cg_u_tol;
       double m_cg_d_tol;
       double m_cg_t_tol;
@@ -256,6 +257,11 @@ namespace PhaseField_monolithic
 			  "Jacobi",
 			  Patterns::Selection("None|Jacobi|SSOR|ILU|AMG"),
 			  "Type of preconditioner used to solve the linear system");
+
+        prm.declare_entry("SSOR relaxation parameter",
+        	          "1.2",
+        		   Patterns::Double(0.0),
+        		   "SSOR relaxation parameter");
 
         prm.declare_entry("CG u tolerance",
 			  "1.0e-9",
@@ -345,6 +351,7 @@ namespace PhaseField_monolithic
         m_type_nonlinear_solver = prm.get("Nonlinear solver type");
         m_type_linear_solver = prm.get("Linear solver type");
         m_type_preconditioner = prm.get("Preconditioner type for CG");
+        m_ssor_parameter = prm.get_double("SSOR relaxation parameter");
         m_cg_u_tol = prm.get_double("CG u tolerance");
         m_cg_d_tol = prm.get_double("CG d tolerance");
         m_cg_t_tol = prm.get_double("CG T tolerance");
@@ -4995,21 +5002,24 @@ namespace PhaseField_monolithic
 	else if (m_parameters.m_type_preconditioner == "SSOR")
 	  {
 	    PreconditionSSOR<SparseMatrix<double>> preconditioner_uu;
-	    preconditioner_uu.initialize(m_tangent_matrix.block(m_u_dof, m_u_dof), 1.2);
+	    preconditioner_uu.initialize(m_tangent_matrix.block(m_u_dof, m_u_dof),
+					 m_parameters.m_ssor_parameter);
 	    cg_uu.solve(m_tangent_matrix.block(m_u_dof, m_u_dof),
 			LBFGS_r_vector.block(m_u_dof),
 			LBFGS_q_vector.block(m_u_dof),
 			preconditioner_uu);
 
 	    PreconditionSSOR<SparseMatrix<double>> preconditioner_dd;
-	    preconditioner_dd.initialize(m_tangent_matrix.block(m_d_dof, m_d_dof), 1.2);
+	    preconditioner_dd.initialize(m_tangent_matrix.block(m_d_dof, m_d_dof),
+					 m_parameters.m_ssor_parameter);
 	    cg_dd.solve(m_tangent_matrix.block(m_d_dof, m_d_dof),
 			LBFGS_r_vector.block(m_d_dof),
 			LBFGS_q_vector.block(m_d_dof),
 			preconditioner_dd);
 
 	    PreconditionSSOR<SparseMatrix<double>> preconditioner_tt;
-	    preconditioner_tt.initialize(m_tangent_matrix.block(m_t_dof, m_t_dof), 1.2);
+	    preconditioner_tt.initialize(m_tangent_matrix.block(m_t_dof, m_t_dof),
+					 m_parameters.m_ssor_parameter);
 	    cg_tt.solve(m_tangent_matrix.block(m_t_dof, m_t_dof),
 			LBFGS_r_vector.block(m_t_dof),
 			LBFGS_q_vector.block(m_t_dof),
@@ -6130,6 +6140,9 @@ namespace PhaseField_monolithic
 		  << m_parameters.m_cg_t_tol << std::endl;
 	m_logfile << "\tPreconditioner type for linear solver (CG) = "
 	          << m_parameters.m_type_preconditioner << std::endl;
+	if (m_parameters.m_type_preconditioner == "SSOR")
+	  m_logfile << "\t\tSSOR relaxation parameter = "
+	            << m_parameters.m_ssor_parameter << std::endl;
       }
 
     m_logfile << "Mesh refinement strategy = " << m_parameters.m_refinement_strategy << std::endl;
