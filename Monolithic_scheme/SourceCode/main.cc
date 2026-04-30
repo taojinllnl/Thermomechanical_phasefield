@@ -2824,7 +2824,7 @@ namespace PhaseField_monolithic
     for (unsigned int i = 0; i < 80; ++i)
       m_logfile << "*";
     m_logfile << std::endl;
-    m_logfile << "\t\t\t\tQuenching test (3D, one layer)" << std::endl;
+    m_logfile << "\t\t\t\tQuenching test (3D, one side)" << std::endl;
     for (unsigned int i = 0; i < 80; ++i)
       m_logfile << "*";
     m_logfile << std::endl;
@@ -2832,13 +2832,13 @@ namespace PhaseField_monolithic
     AssertThrow(dim==3, ExcMessage("The dimension has to be 3D!"));
 
     double const length = 25.0; //mm
-    double const width  = 5.0;  //mm
+    double const width  = 10.0;  //mm
     double const thickness = 1.0;  //mm
 
     std::vector<unsigned int> repetitions(dim, 1);
-    repetitions[0] = 100;
-    repetitions[1] = 20;
-    repetitions[2] = 4;
+    repetitions[0] = 125;
+    repetitions[1] = 50;
+    repetitions[2] = 5;
 
     GridGenerator::subdivided_hyper_rectangle(m_triangulation,
 					      repetitions,
@@ -2869,8 +2869,7 @@ namespace PhaseField_monolithic
 
     if (m_parameters.m_refinement_strategy == "pre-refine")
       {
-	AssertThrow(false,
-		    ExcMessage("3D problem cannot afford a pre-refined mesh!"));
+	m_triangulation.refine_global(m_parameters.m_global_refine_times);
       }
     else if (m_parameters.m_refinement_strategy == "adaptive-refine")
       {
@@ -2882,11 +2881,7 @@ namespace PhaseField_monolithic
 	    initiation_point_refine_unfinished = false;
 	    for (const auto &cell : m_triangulation.active_cell_iterators())
 	      {
-		if (   (cell->center()[0] >  0.0 && cell->center()[0] <  0.13)
-		    || (cell->center()[1] >  0.0 && cell->center()[1] <  0.13)
-		    || (cell->center()[2] >  0.0 && cell->center()[2] <  0.13)
-		    || (cell->center()[2] >  0.87 && cell->center()[2] <  1.0)
-		    )
+		if (cell->center()[1] < 0.13)
 		  {
 		    // Because the mesh is not imported from gmsh, there is no
 		    // material ID associated with each cell. We need to manually
@@ -3437,11 +3432,7 @@ namespace PhaseField_monolithic
 
 	for (auto const & item : support_points_T)
 	  {
-	    if (   (std::fabs(item.second[0] -  0.0) < 1.0e-9)
-		|| (std::fabs(item.second[1] -  0.0) < 1.0e-9)
-		|| (std::fabs(item.second[2] -  0.0) < 1.0e-9)
-		|| (std::fabs(item.second[2] -  1.0) < 1.0e-9)
-		)
+	    if (std::fabs(item.second[1] -  0.0) < 1.0e-9)
 	      {
 		m_solution(item.first) = cool_down_temperature;
 	      }
@@ -3805,35 +3796,43 @@ namespace PhaseField_monolithic
 	  }
 	else if (m_parameters.m_scenario == 7)
 	  {
-	    const int boundary_id_mid_surface_x = 3;
+	    const int boundary_id_left_surface_x = 0;
 	    VectorTools::interpolate_boundary_values(m_dof_handler,
-						     boundary_id_mid_surface_x,
+						     boundary_id_left_surface_x,
+						     Functions::ZeroFunction<dim>(m_n_components),
+						     m_constraints,
+						     m_fe.component_mask(x_displacement));
+	    const int boundary_id_right_surface_x = 3;
+	    VectorTools::interpolate_boundary_values(m_dof_handler,
+						     boundary_id_right_surface_x,
 						     Functions::ZeroFunction<dim>(m_n_components),
 						     m_constraints,
 						     m_fe.component_mask(x_displacement));
 
-	    const int boundary_id_mid_surface_y = 4;
+	    const int boundary_id_front_surface_z = 2;
 	    VectorTools::interpolate_boundary_values(m_dof_handler,
-						     boundary_id_mid_surface_y,
+						     boundary_id_front_surface_z,
+						     Functions::ZeroFunction<dim>(m_n_components),
+						     m_constraints,
+						     m_fe.component_mask(z_displacement));
+	    const int boundary_id_back_surface_z = 5;
+	    VectorTools::interpolate_boundary_values(m_dof_handler,
+						     boundary_id_back_surface_z,
+						     Functions::ZeroFunction<dim>(m_n_components),
+						     m_constraints,
+						     m_fe.component_mask(z_displacement));
+
+	    const int boundary_id_top_surface_y = 4;
+	    VectorTools::interpolate_boundary_values(m_dof_handler,
+						     boundary_id_top_surface_y,
 						     Functions::ZeroFunction<dim>(m_n_components),
 						     m_constraints,
 						     m_fe.component_mask(y_displacement));
 
+/*
 	    typename Triangulation<dim>::active_vertex_iterator vertex_itr;
 	    vertex_itr = m_triangulation.begin_active_vertex();
 	    std::vector<types::global_dof_index> node_xy(m_fe.dofs_per_vertex);
-
-	    for (; vertex_itr != m_triangulation.end_vertex(); ++vertex_itr)
-	      {
-		if (   (std::fabs(vertex_itr->vertex()[0] -  0.0) < 1.0e-9)
-		    && (std::fabs(vertex_itr->vertex()[1] -  0.0) < 1.0e-9)
-		    && (std::fabs(vertex_itr->vertex()[2] -  0.5) < 1.0e-9) )
-		  {
-		    node_xy = usr_utilities::get_vertex_dofs(vertex_itr, m_dof_handler);
-		  }
-	      }
-	    m_constraints.add_line(node_xy[2]);
-	    m_constraints.set_inhomogeneity(node_xy[2], 0.0);
 
 	    for (; vertex_itr != m_triangulation.end_vertex(); ++vertex_itr)
 	      {
@@ -3849,46 +3848,24 @@ namespace PhaseField_monolithic
 
 	    for (; vertex_itr != m_triangulation.end_vertex(); ++vertex_itr)
 	      {
-		if (   (std::fabs(vertex_itr->vertex()[0] -  0.0) < 1.0e-9)
-		    && (std::fabs(vertex_itr->vertex()[1] -  5.0) < 1.0e-9)
+		if (   (std::fabs(vertex_itr->vertex()[0] - 25.0) < 1.0e-9)
+		    && (std::fabs(vertex_itr->vertex()[1] - 10.0) < 1.0e-9)
 		    && (std::fabs(vertex_itr->vertex()[2] -  0.5) < 1.0e-9) )
 		  {
 		    node_xy = usr_utilities::get_vertex_dofs(vertex_itr, m_dof_handler);
 		  }
 	      }
+	    m_constraints.add_line(node_xy[1]);
+	    m_constraints.set_inhomogeneity(node_xy[1], 0.0);
 	    m_constraints.add_line(node_xy[2]);
 	    m_constraints.set_inhomogeneity(node_xy[2], 0.0);
-
+*/
 	    // Remember, the essential B.C. is applied incrementally during each time step.
 	    // If a constant temperature is needed through time, the B.C should be set as zero.
 	    double delta_temperature = 0.0; // temperature change per load step
-	    const int boundary_id_left_surface = 0;
+	    const int boundary_id_bottom_surface_y = 1;
 	    VectorTools::interpolate_boundary_values(m_dof_handler,
-						     boundary_id_left_surface,
-						     Functions::ConstantFunction<dim>(
-						       delta_temperature, m_n_components),
-						     m_constraints,
-						     m_fe.component_mask(temperature));
-
-	    const int boundary_id_front_surface = 1;
-	    VectorTools::interpolate_boundary_values(m_dof_handler,
-						     boundary_id_front_surface,
-						     Functions::ConstantFunction<dim>(
-						       delta_temperature, m_n_components),
-						     m_constraints,
-						     m_fe.component_mask(temperature));
-
-	    const int boundary_id_bottom_surface = 2;
-	    VectorTools::interpolate_boundary_values(m_dof_handler,
-						     boundary_id_bottom_surface,
-						     Functions::ConstantFunction<dim>(
-						       delta_temperature, m_n_components),
-						     m_constraints,
-						     m_fe.component_mask(temperature));
-
-	    const int boundary_id_top_surface = 5;
-	    VectorTools::interpolate_boundary_values(m_dof_handler,
-						     boundary_id_top_surface,
+						     boundary_id_bottom_surface_y,
 						     Functions::ConstantFunction<dim>(
 						       delta_temperature, m_n_components),
 						     m_constraints,
@@ -5238,8 +5215,6 @@ namespace PhaseField_monolithic
     if (m_parameters.m_output_iteration_history)
       print_conv_header_LBFGS();
 
-    unsigned int LBFGS_iteration = 0;
-
     BlockVector<double> LBFGS_r_vector(m_dofs_per_block);
     BlockVector<double> LBFGS_y_vector(m_dofs_per_block);
     BlockVector<double> LBFGS_q_vector(m_dofs_per_block);
@@ -5254,6 +5229,11 @@ namespace PhaseField_monolithic
     double line_search_parameter = 0.0;
     double LBFGS_beta = 0.0;
     double rho = 0.0;
+
+    // It is IMPORTANT that LBFGS_iteration starts at 0 (not 1), since
+    // it has an implication on the boundary conditions.
+    // See make_constraints() for details.
+    unsigned int LBFGS_iteration = 0;
 
     for (; LBFGS_iteration < m_parameters.m_max_iterations_LBFGS; ++LBFGS_iteration)
       {
