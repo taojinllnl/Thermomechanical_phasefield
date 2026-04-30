@@ -44,7 +44,7 @@ The repository contains the following content:
 2. the input files for several numerical examples included in the aforementioned manuscript.
 
 ### Recent updates
-1. (Apr. 29th, 2026) Add the option to choose various preconditioners (identity, Jacobi, SSOR, ILU, AMG). And add the option to differentiate between the plane stress and plane strain cases in 2D.
+1. (Apr. 29th, 2026) Add the option to choose various preconditioners (identity, Jacobi, SSOR, ILU, AMG) for the monolithic solver. And add the option to differentiate between the plane stress and plane strain cases in 2D.
 
 ### How to compile
 The three solving schemes are implemented in [deal.II](https://www.dealii.org/) (originally with version 9.4.0 and also tested for the developed branch as Sept. 10th, 2025), which is an open source finite element library. In order to use the code (**main.cc**) provided here, deal.II should be configured with MPI and at least with the interfaces to BLAS, LAPACK, Threading Building Blocks (TBB), and UMFPACK. For optional interfaces to other software packages, see https://www.dealii.org/developer/readme.html.
