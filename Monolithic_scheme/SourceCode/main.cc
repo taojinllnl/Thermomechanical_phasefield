@@ -86,6 +86,12 @@
 #include <deal.II/lac/precondition_selector.h>
 #include <deal.II/lac/solver_selector.h>
 #include <deal.II/lac/sparse_direct.h>
+#include <deal.II/lac/sparse_ilu.h>
+
+#include <deal.II/lac/petsc_precondition.h>
+#include <deal.II/lac/petsc_solver.h>
+#include <deal.II/lac/petsc_vector.h>
+#include <deal.II/lac/petsc_sparse_matrix.h>
 
 #include <deal.II/numerics/error_estimator.h>
 
@@ -105,7 +111,6 @@
 
 #include "SpectrumDecomposition.h"
 #include "Utilities.h"
-
 
 namespace PhaseField_monolithic
 {
@@ -183,6 +188,8 @@ namespace PhaseField_monolithic
       bool m_plane_stress;
       std::string m_type_nonlinear_solver;
       std::string m_type_linear_solver;
+      std::string m_type_preconditioner;
+      double m_ssor_parameter;
       double m_cg_u_tol;
       double m_cg_d_tol;
       double m_cg_t_tol;
@@ -245,6 +252,16 @@ namespace PhaseField_monolithic
                           "Direct",
                           Patterns::Selection("Direct|CG"),
                           "Type of solver used to solve the linear system B0");
+
+        prm.declare_entry("Preconditioner type for CG",
+			  "Jacobi",
+			  Patterns::Selection("None|Jacobi|SSOR|ILU|AMG"),
+			  "Type of preconditioner used to solve the linear system");
+
+        prm.declare_entry("SSOR relaxation parameter",
+        	          "1.2",
+        		   Patterns::Double(0.0),
+        		   "SSOR relaxation parameter");
 
         prm.declare_entry("CG u tolerance",
 			  "1.0e-9",
@@ -333,6 +350,8 @@ namespace PhaseField_monolithic
         m_plane_stress = prm.get_bool("Plane stress");
         m_type_nonlinear_solver = prm.get("Nonlinear solver type");
         m_type_linear_solver = prm.get("Linear solver type");
+        m_type_preconditioner = prm.get("Preconditioner type for CG");
+        m_ssor_parameter = prm.get_double("SSOR relaxation parameter");
         m_cg_u_tol = prm.get_double("CG u tolerance");
         m_cg_d_tol = prm.get_double("CG d tolerance");
         m_cg_t_tol = prm.get_double("CG T tolerance");
@@ -1436,7 +1455,66 @@ namespace PhaseField_monolithic
 
     bool local_refine_and_solution_transfer(BlockVector<double> & solution_delta,
 					    BlockVector<double> & LBFGS_update_refine);
+
+    // The following three functions are created to convert between Petsc objects (vector and matrix)
+    // and dealii objects (vector and sparse matrix)
+    void copy_sparse_matrix_to_petsc(const SparsityPattern &src_sparsity_pattern,
+	                             const SparseMatrix<double> &src,
+                                     PETScWrappers::SparseMatrix &dst);
+
+    void copy_dealii_vector_to_petsc_using_set(const Vector<double> &src,
+					       PETScWrappers::MPI::Vector  &dst);
+
+    void copy_petsc_vector_to_dealii(const PETScWrappers::MPI::Vector &src,
+                                     Vector<double>        &dst);
+
   }; // class PhaseFieldMonolithicSolve
+
+  template <int dim>
+  void PhaseFieldMonolithicSolve<dim>::
+  copy_sparse_matrix_to_petsc(const SparsityPattern &src_sparsity_pattern,
+                              const SparseMatrix<double> &src,
+                              PETScWrappers::SparseMatrix &dst)
+  {
+      dst.reinit(src_sparsity_pattern);
+      for (unsigned int i = 0; i < src.m(); ++i)
+          for (auto entry = src.begin(i); entry != src.end(i); ++entry)
+              dst.set(i, entry->column(), entry->value());
+
+      dst.compress(VectorOperation::insert);
+  }
+
+  template <int dim>
+  void PhaseFieldMonolithicSolve<dim>::
+  copy_dealii_vector_to_petsc_using_set(const Vector<double> &src,
+					PETScWrappers::MPI::Vector &dst)
+  {
+      std::vector<types::global_dof_index> indices(src.size());
+      std::iota(indices.begin(), indices.end(), 0);
+
+      std::vector<PetscScalar> values(src.size());
+      src.extract_subvector_to(indices, values);
+
+      dst.set(indices, values);
+      dst.compress(VectorOperation::insert);
+  }
+
+  template <int dim>
+  void PhaseFieldMonolithicSolve<dim>::
+  copy_petsc_vector_to_dealii(const PETScWrappers::MPI::Vector &src,
+                              Vector<double>        &dst)
+  {
+      dst.reinit(src.size());
+
+      std::vector<types::global_dof_index> indices(src.size());
+      std::iota(indices.begin(), indices.end(), 0);
+
+      std::vector<PetscScalar> values(src.size());
+      src.extract_subvector_to(indices, values);
+
+      for (unsigned int i = 0; i < dst.size(); ++i)
+          dst[i] = static_cast<double>(values[i]);
+  }
 
   template <int dim>
   void PhaseFieldMonolithicSolve<dim>::get_error_residual(Errors &error_residual)
@@ -2746,7 +2824,7 @@ namespace PhaseField_monolithic
     for (unsigned int i = 0; i < 80; ++i)
       m_logfile << "*";
     m_logfile << std::endl;
-    m_logfile << "\t\t\t\tQuenching test (3D, one layer)" << std::endl;
+    m_logfile << "\t\t\t\tQuenching test (3D, one side)" << std::endl;
     for (unsigned int i = 0; i < 80; ++i)
       m_logfile << "*";
     m_logfile << std::endl;
@@ -2754,13 +2832,13 @@ namespace PhaseField_monolithic
     AssertThrow(dim==3, ExcMessage("The dimension has to be 3D!"));
 
     double const length = 25.0; //mm
-    double const width  = 5.0;  //mm
+    double const width  = 10.0;  //mm
     double const thickness = 1.0;  //mm
 
     std::vector<unsigned int> repetitions(dim, 1);
-    repetitions[0] = 100;
-    repetitions[1] = 20;
-    repetitions[2] = 4;
+    repetitions[0] = 125;
+    repetitions[1] = 50;
+    repetitions[2] = 5;
 
     GridGenerator::subdivided_hyper_rectangle(m_triangulation,
 					      repetitions,
@@ -2791,8 +2869,7 @@ namespace PhaseField_monolithic
 
     if (m_parameters.m_refinement_strategy == "pre-refine")
       {
-	AssertThrow(false,
-		    ExcMessage("3D problem cannot afford a pre-refined mesh!"));
+	m_triangulation.refine_global(m_parameters.m_global_refine_times);
       }
     else if (m_parameters.m_refinement_strategy == "adaptive-refine")
       {
@@ -2804,11 +2881,7 @@ namespace PhaseField_monolithic
 	    initiation_point_refine_unfinished = false;
 	    for (const auto &cell : m_triangulation.active_cell_iterators())
 	      {
-		if (   (cell->center()[0] >  0.0 && cell->center()[0] <  0.13)
-		    || (cell->center()[1] >  0.0 && cell->center()[1] <  0.13)
-		    || (cell->center()[2] >  0.0 && cell->center()[2] <  0.13)
-		    || (cell->center()[2] >  0.87 && cell->center()[2] <  1.0)
-		    )
+		if (cell->center()[1] < 0.13)
 		  {
 		    // Because the mesh is not imported from gmsh, there is no
 		    // material ID associated with each cell. We need to manually
@@ -3359,11 +3432,7 @@ namespace PhaseField_monolithic
 
 	for (auto const & item : support_points_T)
 	  {
-	    if (   (std::fabs(item.second[0] -  0.0) < 1.0e-9)
-		|| (std::fabs(item.second[1] -  0.0) < 1.0e-9)
-		|| (std::fabs(item.second[2] -  0.0) < 1.0e-9)
-		|| (std::fabs(item.second[2] -  1.0) < 1.0e-9)
-		)
+	    if (std::fabs(item.second[1] -  0.0) < 1.0e-9)
 	      {
 		m_solution(item.first) = cool_down_temperature;
 	      }
@@ -3727,35 +3796,43 @@ namespace PhaseField_monolithic
 	  }
 	else if (m_parameters.m_scenario == 7)
 	  {
-	    const int boundary_id_mid_surface_x = 3;
+	    const int boundary_id_left_surface_x = 0;
 	    VectorTools::interpolate_boundary_values(m_dof_handler,
-						     boundary_id_mid_surface_x,
+						     boundary_id_left_surface_x,
+						     Functions::ZeroFunction<dim>(m_n_components),
+						     m_constraints,
+						     m_fe.component_mask(x_displacement));
+	    const int boundary_id_right_surface_x = 3;
+	    VectorTools::interpolate_boundary_values(m_dof_handler,
+						     boundary_id_right_surface_x,
 						     Functions::ZeroFunction<dim>(m_n_components),
 						     m_constraints,
 						     m_fe.component_mask(x_displacement));
 
-	    const int boundary_id_mid_surface_y = 4;
+	    const int boundary_id_front_surface_z = 2;
 	    VectorTools::interpolate_boundary_values(m_dof_handler,
-						     boundary_id_mid_surface_y,
+						     boundary_id_front_surface_z,
+						     Functions::ZeroFunction<dim>(m_n_components),
+						     m_constraints,
+						     m_fe.component_mask(z_displacement));
+	    const int boundary_id_back_surface_z = 5;
+	    VectorTools::interpolate_boundary_values(m_dof_handler,
+						     boundary_id_back_surface_z,
+						     Functions::ZeroFunction<dim>(m_n_components),
+						     m_constraints,
+						     m_fe.component_mask(z_displacement));
+
+	    const int boundary_id_top_surface_y = 4;
+	    VectorTools::interpolate_boundary_values(m_dof_handler,
+						     boundary_id_top_surface_y,
 						     Functions::ZeroFunction<dim>(m_n_components),
 						     m_constraints,
 						     m_fe.component_mask(y_displacement));
 
+/*
 	    typename Triangulation<dim>::active_vertex_iterator vertex_itr;
 	    vertex_itr = m_triangulation.begin_active_vertex();
 	    std::vector<types::global_dof_index> node_xy(m_fe.dofs_per_vertex);
-
-	    for (; vertex_itr != m_triangulation.end_vertex(); ++vertex_itr)
-	      {
-		if (   (std::fabs(vertex_itr->vertex()[0] -  0.0) < 1.0e-9)
-		    && (std::fabs(vertex_itr->vertex()[1] -  0.0) < 1.0e-9)
-		    && (std::fabs(vertex_itr->vertex()[2] -  0.5) < 1.0e-9) )
-		  {
-		    node_xy = usr_utilities::get_vertex_dofs(vertex_itr, m_dof_handler);
-		  }
-	      }
-	    m_constraints.add_line(node_xy[2]);
-	    m_constraints.set_inhomogeneity(node_xy[2], 0.0);
 
 	    for (; vertex_itr != m_triangulation.end_vertex(); ++vertex_itr)
 	      {
@@ -3771,46 +3848,24 @@ namespace PhaseField_monolithic
 
 	    for (; vertex_itr != m_triangulation.end_vertex(); ++vertex_itr)
 	      {
-		if (   (std::fabs(vertex_itr->vertex()[0] -  0.0) < 1.0e-9)
-		    && (std::fabs(vertex_itr->vertex()[1] -  5.0) < 1.0e-9)
+		if (   (std::fabs(vertex_itr->vertex()[0] - 25.0) < 1.0e-9)
+		    && (std::fabs(vertex_itr->vertex()[1] - 10.0) < 1.0e-9)
 		    && (std::fabs(vertex_itr->vertex()[2] -  0.5) < 1.0e-9) )
 		  {
 		    node_xy = usr_utilities::get_vertex_dofs(vertex_itr, m_dof_handler);
 		  }
 	      }
+	    m_constraints.add_line(node_xy[1]);
+	    m_constraints.set_inhomogeneity(node_xy[1], 0.0);
 	    m_constraints.add_line(node_xy[2]);
 	    m_constraints.set_inhomogeneity(node_xy[2], 0.0);
-
+*/
 	    // Remember, the essential B.C. is applied incrementally during each time step.
 	    // If a constant temperature is needed through time, the B.C should be set as zero.
 	    double delta_temperature = 0.0; // temperature change per load step
-	    const int boundary_id_left_surface = 0;
+	    const int boundary_id_bottom_surface_y = 1;
 	    VectorTools::interpolate_boundary_values(m_dof_handler,
-						     boundary_id_left_surface,
-						     Functions::ConstantFunction<dim>(
-						       delta_temperature, m_n_components),
-						     m_constraints,
-						     m_fe.component_mask(temperature));
-
-	    const int boundary_id_front_surface = 1;
-	    VectorTools::interpolate_boundary_values(m_dof_handler,
-						     boundary_id_front_surface,
-						     Functions::ConstantFunction<dim>(
-						       delta_temperature, m_n_components),
-						     m_constraints,
-						     m_fe.component_mask(temperature));
-
-	    const int boundary_id_bottom_surface = 2;
-	    VectorTools::interpolate_boundary_values(m_dof_handler,
-						     boundary_id_bottom_surface,
-						     Functions::ConstantFunction<dim>(
-						       delta_temperature, m_n_components),
-						     m_constraints,
-						     m_fe.component_mask(temperature));
-
-	    const int boundary_id_top_surface = 5;
-	    VectorTools::interpolate_boundary_values(m_dof_handler,
-						     boundary_id_top_surface,
+						     boundary_id_bottom_surface_y,
 						     Functions::ConstantFunction<dim>(
 						       delta_temperature, m_n_components),
 						     m_constraints,
@@ -4886,9 +4941,9 @@ namespace PhaseField_monolithic
   void PhaseFieldMonolithicSolve<dim>::LBFGS_B0(BlockVector<double> & LBFGS_r_vector,
 						BlockVector<double> & LBFGS_q_vector)
   {
-    m_timer.enter_subsection("Solve B0");
-
     assemble_system_B0();
+
+    m_timer.enter_subsection("Solve B0");
 
     if (m_parameters.m_type_linear_solver == "Direct")
       {
@@ -4934,32 +4989,183 @@ namespace PhaseField_monolithic
 	SolverControl            solver_control_uu(1e6, m_parameters.m_cg_u_tol);
 	SolverCG<Vector<double>> cg_uu(solver_control_uu);
 
-	PreconditionJacobi<SparseMatrix<double>> preconditioner_uu;
-	preconditioner_uu.initialize(m_tangent_matrix.block(m_u_dof, m_u_dof), 1.0);
-	cg_uu.solve(m_tangent_matrix.block(m_u_dof, m_u_dof),
-	            LBFGS_r_vector.block(m_u_dof),
-	            LBFGS_q_vector.block(m_u_dof),
-	            preconditioner_uu);
-
 	SolverControl            solver_control_dd(1e6, m_parameters.m_cg_d_tol);
 	SolverCG<Vector<double>> cg_dd(solver_control_dd);
-
-	PreconditionJacobi<SparseMatrix<double>> preconditioner_dd;
-	preconditioner_dd.initialize(m_tangent_matrix.block(m_d_dof, m_d_dof), 1.0);
-	cg_dd.solve(m_tangent_matrix.block(m_d_dof, m_d_dof),
-	            LBFGS_r_vector.block(m_d_dof),
-	            LBFGS_q_vector.block(m_d_dof),
-	            preconditioner_dd);
 
 	SolverControl            solver_control_tt(1e6, m_parameters.m_cg_t_tol);
 	SolverCG<Vector<double>> cg_tt(solver_control_tt);
 
-	PreconditionJacobi<SparseMatrix<double>> preconditioner_tt;
-	preconditioner_tt.initialize(m_tangent_matrix.block(m_t_dof, m_t_dof), 1.0);
-	cg_tt.solve(m_tangent_matrix.block(m_t_dof, m_t_dof),
-	            LBFGS_r_vector.block(m_t_dof),
-	            LBFGS_q_vector.block(m_t_dof),
-	            preconditioner_tt);
+	if (m_parameters.m_type_preconditioner == "None")
+	  {
+	    cg_uu.solve(m_tangent_matrix.block(m_u_dof, m_u_dof),
+			LBFGS_r_vector.block(m_u_dof),
+			LBFGS_q_vector.block(m_u_dof),
+			PreconditionIdentity());
+
+	    cg_dd.solve(m_tangent_matrix.block(m_d_dof, m_d_dof),
+			LBFGS_r_vector.block(m_d_dof),
+			LBFGS_q_vector.block(m_d_dof),
+			PreconditionIdentity());
+
+	    cg_tt.solve(m_tangent_matrix.block(m_t_dof, m_t_dof),
+			LBFGS_r_vector.block(m_t_dof),
+			LBFGS_q_vector.block(m_t_dof),
+			PreconditionIdentity());
+	  }
+	else if (m_parameters.m_type_preconditioner == "Jacobi")
+	  {
+	    PreconditionJacobi<SparseMatrix<double>> preconditioner_uu;
+	    preconditioner_uu.initialize(m_tangent_matrix.block(m_u_dof, m_u_dof), 1.0);
+	    cg_uu.solve(m_tangent_matrix.block(m_u_dof, m_u_dof),
+			LBFGS_r_vector.block(m_u_dof),
+			LBFGS_q_vector.block(m_u_dof),
+			preconditioner_uu);
+
+	    PreconditionJacobi<SparseMatrix<double>> preconditioner_dd;
+	    preconditioner_dd.initialize(m_tangent_matrix.block(m_d_dof, m_d_dof), 1.0);
+	    cg_dd.solve(m_tangent_matrix.block(m_d_dof, m_d_dof),
+			LBFGS_r_vector.block(m_d_dof),
+			LBFGS_q_vector.block(m_d_dof),
+			preconditioner_dd);
+
+	    PreconditionJacobi<SparseMatrix<double>> preconditioner_tt;
+	    preconditioner_tt.initialize(m_tangent_matrix.block(m_t_dof, m_t_dof), 1.0);
+	    cg_tt.solve(m_tangent_matrix.block(m_t_dof, m_t_dof),
+			LBFGS_r_vector.block(m_t_dof),
+			LBFGS_q_vector.block(m_t_dof),
+			preconditioner_tt);
+	  }
+	else if (m_parameters.m_type_preconditioner == "SSOR")
+	  {
+	    PreconditionSSOR<SparseMatrix<double>> preconditioner_uu;
+	    preconditioner_uu.initialize(m_tangent_matrix.block(m_u_dof, m_u_dof),
+					 m_parameters.m_ssor_parameter);
+	    cg_uu.solve(m_tangent_matrix.block(m_u_dof, m_u_dof),
+			LBFGS_r_vector.block(m_u_dof),
+			LBFGS_q_vector.block(m_u_dof),
+			preconditioner_uu);
+
+	    PreconditionSSOR<SparseMatrix<double>> preconditioner_dd;
+	    preconditioner_dd.initialize(m_tangent_matrix.block(m_d_dof, m_d_dof),
+					 m_parameters.m_ssor_parameter);
+	    cg_dd.solve(m_tangent_matrix.block(m_d_dof, m_d_dof),
+			LBFGS_r_vector.block(m_d_dof),
+			LBFGS_q_vector.block(m_d_dof),
+			preconditioner_dd);
+
+	    PreconditionSSOR<SparseMatrix<double>> preconditioner_tt;
+	    preconditioner_tt.initialize(m_tangent_matrix.block(m_t_dof, m_t_dof),
+					 m_parameters.m_ssor_parameter);
+	    cg_tt.solve(m_tangent_matrix.block(m_t_dof, m_t_dof),
+			LBFGS_r_vector.block(m_t_dof),
+			LBFGS_q_vector.block(m_t_dof),
+			preconditioner_tt);
+	  }
+	else if (m_parameters.m_type_preconditioner == "ILU")
+	  {
+            SparseILU<double> preconditioner_uu;
+	    preconditioner_uu.initialize(m_tangent_matrix.block(m_u_dof, m_u_dof));
+	    cg_uu.solve(m_tangent_matrix.block(m_u_dof, m_u_dof),
+			LBFGS_r_vector.block(m_u_dof),
+			LBFGS_q_vector.block(m_u_dof),
+			preconditioner_uu);
+
+	    SparseILU<double> preconditioner_dd;
+	    preconditioner_dd.initialize(m_tangent_matrix.block(m_d_dof, m_d_dof));
+	    cg_dd.solve(m_tangent_matrix.block(m_d_dof, m_d_dof),
+			LBFGS_r_vector.block(m_d_dof),
+			LBFGS_q_vector.block(m_d_dof),
+			preconditioner_dd);
+
+	    SparseILU<double> preconditioner_tt;
+	    preconditioner_tt.initialize(m_tangent_matrix.block(m_t_dof, m_t_dof));
+	    cg_tt.solve(m_tangent_matrix.block(m_t_dof, m_t_dof),
+			LBFGS_r_vector.block(m_t_dof),
+			LBFGS_q_vector.block(m_t_dof),
+			preconditioner_tt);
+	  }
+	else if (m_parameters.m_type_preconditioner == "AMG")
+	  {
+	    m_timer.enter_subsection("PETSc overhead");
+
+	    // solve uu overhead
+	    const types::global_dof_index n_dofs_uu = m_dofs_per_block[m_u_dof];
+	    PETScWrappers::SparseMatrix   petsc_matrix_uu;
+	    PETScWrappers::MPI::Vector    petsc_solution_uu;
+	    PETScWrappers::MPI::Vector    petsc_rhs_uu;
+	    copy_sparse_matrix_to_petsc(m_sparsity_pattern.block(m_u_dof, m_u_dof),
+		                        m_tangent_matrix.block(m_u_dof, m_u_dof),
+					petsc_matrix_uu);
+	    petsc_solution_uu.reinit(MPI_COMM_SELF, n_dofs_uu, n_dofs_uu);
+	    petsc_rhs_uu.reinit(MPI_COMM_SELF, n_dofs_uu, n_dofs_uu);
+	    petsc_rhs_uu      = 0.0;
+	    petsc_solution_uu = 0.0;
+	    copy_dealii_vector_to_petsc_using_set(LBFGS_q_vector.block(m_u_dof),
+						  petsc_rhs_uu);
+
+	    // solve dd overhead
+	    const types::global_dof_index n_dofs_dd = m_dofs_per_block[m_d_dof];
+	    PETScWrappers::SparseMatrix   petsc_matrix_dd;
+	    PETScWrappers::MPI::Vector    petsc_solution_dd;
+	    PETScWrappers::MPI::Vector    petsc_rhs_dd;
+	    copy_sparse_matrix_to_petsc(m_sparsity_pattern.block(m_d_dof, m_d_dof),
+		                        m_tangent_matrix.block(m_d_dof, m_d_dof),
+					petsc_matrix_dd);
+	    petsc_solution_dd.reinit(MPI_COMM_SELF, n_dofs_dd, n_dofs_dd);
+	    petsc_rhs_dd.reinit(MPI_COMM_SELF, n_dofs_dd, n_dofs_dd);
+	    petsc_rhs_dd      = 0.0;
+	    petsc_solution_dd = 0.0;
+	    copy_dealii_vector_to_petsc_using_set(LBFGS_q_vector.block(m_d_dof),
+						  petsc_rhs_dd);
+
+	    // solve tt overhead
+	    const types::global_dof_index n_dofs_tt = m_dofs_per_block[m_t_dof];
+	    PETScWrappers::SparseMatrix petsc_matrix_tt;
+	    PETScWrappers::MPI::Vector  petsc_solution_tt;
+	    PETScWrappers::MPI::Vector  petsc_rhs_tt;
+	    copy_sparse_matrix_to_petsc(m_sparsity_pattern.block(m_t_dof, m_t_dof),
+		                        m_tangent_matrix.block(m_t_dof, m_t_dof),
+					petsc_matrix_tt);
+	    petsc_solution_tt.reinit(MPI_COMM_SELF, n_dofs_tt, n_dofs_tt);
+	    petsc_rhs_tt.reinit(MPI_COMM_SELF, n_dofs_tt, n_dofs_tt);
+	    petsc_rhs_tt      = 0.0;
+	    petsc_solution_tt = 0.0;
+	    copy_dealii_vector_to_petsc_using_set(LBFGS_q_vector.block(m_t_dof),
+						  petsc_rhs_tt);
+
+	    m_timer.leave_subsection();
+
+	    PETScWrappers::PreconditionBoomerAMG::AdditionalData amg_data;
+	    amg_data.symmetric_operator = true;
+	    amg_data.strong_threshold   = 0.25;
+	    PETScWrappers::PreconditionBoomerAMG petsc_amg;
+
+	    // solve uu
+	    petsc_amg.initialize(petsc_matrix_uu, amg_data);
+	    PETScWrappers::SolverCG  petsc_solver_uu(solver_control_uu);
+	    petsc_solver_uu.solve(petsc_matrix_uu, petsc_solution_uu, petsc_rhs_uu, petsc_amg);
+
+	    // solve dd
+	    petsc_amg.initialize(petsc_matrix_dd, amg_data);
+	    PETScWrappers::SolverCG  petsc_solver_dd(solver_control_dd);
+	    petsc_solver_dd.solve(petsc_matrix_dd, petsc_solution_dd, petsc_rhs_dd, petsc_amg);
+
+	    // solve tt
+	    petsc_amg.initialize(petsc_matrix_tt, amg_data);
+	    PETScWrappers::SolverCG  petsc_solver_tt(solver_control_tt);
+	    petsc_solver_tt.solve(petsc_matrix_tt, petsc_solution_tt, petsc_rhs_tt, petsc_amg);
+
+	    m_timer.enter_subsection("PETSc overhead");
+
+	    copy_petsc_vector_to_dealii(petsc_solution_uu,
+					LBFGS_r_vector.block(m_u_dof));
+	    copy_petsc_vector_to_dealii(petsc_solution_dd,
+	    				LBFGS_r_vector.block(m_d_dof));
+	    copy_petsc_vector_to_dealii(petsc_solution_tt,
+					LBFGS_r_vector.block(m_t_dof));
+
+	    m_timer.leave_subsection();
+	  }
       }
     else
       {
@@ -5009,8 +5215,6 @@ namespace PhaseField_monolithic
     if (m_parameters.m_output_iteration_history)
       print_conv_header_LBFGS();
 
-    unsigned int LBFGS_iteration = 0;
-
     BlockVector<double> LBFGS_r_vector(m_dofs_per_block);
     BlockVector<double> LBFGS_y_vector(m_dofs_per_block);
     BlockVector<double> LBFGS_q_vector(m_dofs_per_block);
@@ -5025,6 +5229,11 @@ namespace PhaseField_monolithic
     double line_search_parameter = 0.0;
     double LBFGS_beta = 0.0;
     double rho = 0.0;
+
+    // It is IMPORTANT that LBFGS_iteration starts at 0 (not 1), since
+    // it has an implication on the boundary conditions.
+    // See make_constraints() for details.
+    unsigned int LBFGS_iteration = 0;
 
     for (; LBFGS_iteration < m_parameters.m_max_iterations_LBFGS; ++LBFGS_iteration)
       {
@@ -6018,6 +6227,19 @@ namespace PhaseField_monolithic
 		  << m_parameters.m_cg_d_tol << std::endl;
 	m_logfile << "\tCG tolerance for inverse K_TT = "
 		  << m_parameters.m_cg_t_tol << std::endl;
+	m_logfile << "\tPreconditioner type for linear solver (CG) = "
+	          << m_parameters.m_type_preconditioner << std::endl;
+	if (m_parameters.m_type_preconditioner == "SSOR")
+	  m_logfile << "\t\tSSOR relaxation parameter = "
+	            << m_parameters.m_ssor_parameter << std::endl;
+	if (m_parameters.m_type_preconditioner == "AMG")
+	  m_logfile << "\t\tWARNING! In order to use the AMG preconditioner\n"
+	      "\t\tprovided by the PETScWrappers, vectors and matrices need to\n"
+	      "\t\tbe converted back and forth between the PETSc version and the\n"
+	      "\t\tdeal.ii version. As a result, there is a large overhead. The AMG\n"
+	      "\t\tpreconditioner is provided here only for demonstration purpose. For\n"
+	      "\t\tmore serious application, please use the MPI version of this code."
+	            << std::endl;
       }
 
     m_logfile << "Mesh refinement strategy = " << m_parameters.m_refinement_strategy << std::endl;
@@ -6181,6 +6403,11 @@ int main(int argc, char* argv[])
 {
 
   using namespace dealii;
+
+  // This is needed in order to use PETSc AMG preconditioner provided
+  // via the PETScWrappers interface (note that this code is still only
+  // for serial run.)
+  Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 1);
 
   if (argc != 2)
     AssertThrow(false,
