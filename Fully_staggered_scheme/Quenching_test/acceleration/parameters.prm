@@ -8,22 +8,32 @@ subsection Scenario
   # 4 - square shear   (2D structured mesh)
   # 5 - quenching test (2D structured mesh, quarter size)
   # 5 - quenching test (2D structured mesh, half size)
-  set Scenario number = 4
+  set Scenario number = 6
   
   # Name of the log file
-  set Log file name = square_shear_structured.log
+  set Log file name = quenching_structured.log
   
   # Shall we write the iteration history to the log file? (yes or no)
   set Output iteration history = yes
   
   # Does the heat conduciton equaiton contains the mechanical coupling term? (yes or no)
-  set Coupling on heat equation = yes
+  set Coupling on heat equation = no
 
   # Is the thermal conductivity degraded by phasefield? (yes or no)
-  set Degrade thermal conductivity = yes
+  set Degrade thermal conductivity = no
 
   #If it is 2D, is it plane-stress? (yes or no)
   set Plane stress = yes
+
+  # Over relaxation omega (1.0 means no relaxation)
+  set Over relaxation omega = 1.8
+ 
+  # Anderson acceleration depth (0 means no acceleration)
+  set Anderson acceleration depth = 1
+
+  # Switch from over-relaxation to Anderson acceleration 
+  # after the number steps of consecustive residual reduction
+  set Relaxation to Anderson acceleration switch = 5
 
   # Nonlinear solver type for the mehcanical (u) subproblem (Newton)
   set Nonlinear solver type = Newton
@@ -35,7 +45,7 @@ subsection Scenario
   set Mesh refinement strategy = pre-refine
 
   # Global refinement times across the entire domain
-  set Global refinement times = 0
+  set Global refinement times = 2
   
   # Local pre-refinement times along the crack path that is known a priori
   set Local prerefinement times = 4
@@ -54,7 +64,7 @@ subsection Scenario
   
   # Allowed maximum ratio between mesh size h and phasefield length scale l
   # insdie the crack zone (nodal phasefield value larger than threshold)
-  set Allowed max hl ratio = 0.5
+  set Allowed max hl ratio = 0.251
   
   # Total number of material regions
   set Material regions = 1
@@ -92,7 +102,7 @@ subsection Heat supply
   set Heat supply = 0.0
   
   # Reference temperature, unit: K
-  set Reference temperature = 300.0
+  set Reference temperature = 573.15
 end  
 
 subsection Nonlinear solver  
@@ -115,7 +125,7 @@ subsection Nonlinear solver
   set Tolerance u increment                 = 1.0e-3
 
   # T increment tolerance
-  set Tolerance T increment                 = 1.0e-1
+  set Tolerance T increment                 = 1.0e-3
   
   # d increment tolerance
   set Tolerance phasefield increment        = 1.0e-3
@@ -123,7 +133,7 @@ end
 
 subsection Time
   # End time
-  set End time       = 28.0e-3
+  set End time       = 200.0e-3
   
   # Time data groups
   set Time data file = timeDataFile
