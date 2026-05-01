@@ -40,6 +40,11 @@
  * 7. Using adaptive mesh refinement.
  * 8. The displacement is solved using Newton method, and the temperature problem
  *    and the phase-field problem are both linear.
+ *
+ * Recent updates:
+ * 2. Add the option for Anderson acceleration and over-relaxation (Apr. 29th, 2026)
+ * 1. Add a flag to differentiate between the plane stress and plane strain cases
+ *    in 2D (Mar. 12th, 2026)
  */
 
 #include <deal.II/grid/tria.h>
@@ -112,6 +117,66 @@ namespace PhaseField_T_and_u_and_d
 {
   using namespace dealii;
 
+  void constrained_least_square(const std::list<Vector<double>> & delta_u_vector_list,
+  		                const std::list<Vector<double>> & delta_d_vector_list,
+				const std::list<Vector<double>> & delta_t_vector_list,
+  		                Vector<double> & alpha)
+  {
+    unsigned int matrix_size = delta_u_vector_list.size();
+
+    // F^T F is symmetric
+    FullMatrix<double> FtF_matrix(matrix_size);
+
+    const auto itr_delta_u_begin = delta_u_vector_list.begin();
+    const auto itr_delta_d_begin = delta_d_vector_list.begin();
+    const auto itr_delta_t_begin = delta_t_vector_list.begin();
+
+    // regularization
+    // The determinant of FtF_matrix is typically quite small
+    // because all the columns are incremental solution vectors.
+    // We should scale the FtF_matrix
+    const double scale = delta_u_vector_list.back()
+	               * delta_u_vector_list.back()
+		       + delta_d_vector_list.back()
+		       * delta_d_vector_list.back()
+		       + delta_t_vector_list.back()
+		       * delta_t_vector_list.back();
+
+    const double reg = 0.0e-9;
+    for (unsigned int i = 0; i < matrix_size; ++i)
+      {
+	for (unsigned int j = 0; j <= i; ++j)
+	  {
+	    FtF_matrix(i, j) = (*std::next(itr_delta_u_begin, i))
+			     * (*std::next(itr_delta_u_begin, j))
+			     + (*std::next(itr_delta_d_begin, i))
+			     * (*std::next(itr_delta_d_begin, j))
+			     + (*std::next(itr_delta_t_begin, i))
+			     * (*std::next(itr_delta_t_begin, j));
+
+	    FtF_matrix(i, j) /= scale;
+
+	    FtF_matrix(j, i) = FtF_matrix(i, j);
+	  }
+	FtF_matrix(i, i) += reg;
+      }
+
+    //std::cout << "Determinant = " << FtF_matrix.determinant() << std::endl;
+
+    FullMatrix<double> FtF_matrix_inv(matrix_size);
+    FtF_matrix_inv.invert(FtF_matrix);
+
+    Vector<double> ones(matrix_size);
+    ones = 0;
+    ones.add(1.0);
+
+    FtF_matrix_inv.vmult(alpha, ones, false);
+
+    const double sum_alpha = ones * alpha;
+
+    alpha /= sum_alpha;
+  }
+
   // body force
   template <int dim>
   void right_hand_side(const std::vector<Point<dim>> &points,
@@ -181,6 +246,9 @@ namespace PhaseField_T_and_u_and_d
       bool m_output_iteration_history;
       bool m_coupling_on_heat_eq;
       bool m_degrade_conductivity;
+      double m_over_relaxation_omega;
+      unsigned int m_anderson_depth;
+      unsigned int m_omega_aa_switch;
       bool m_plane_stress;
       std::string m_type_nonlinear_solver;
       std::string m_type_linear_solver;
@@ -221,7 +289,8 @@ namespace PhaseField_T_and_u_and_d
         prm.declare_entry("Coupling on heat equation",
 			  "no",
                           Patterns::Selection("yes|no"),
-			  "Does the heat equation contain the coupling term?");
+			  "Does the heat equation contain the coupling term related "
+			  "to the displacement?");
 
         prm.declare_entry("Degrade thermal conductivity",
 			  "yes",
@@ -232,6 +301,23 @@ namespace PhaseField_T_and_u_and_d
 			  "no",
 			  Patterns::Selection("yes|no"),
 			  "If it is 2D, is it plane-stress?");
+
+        prm.declare_entry("Over relaxation omega",
+        	          "1.0",
+        	          Patterns::Double(),
+        	          "Over relaxation omega value for accelerated staggered scheme");
+
+        prm.declare_entry("Anderson acceleration depth",
+                          "0",
+                          Patterns::Integer(0),
+                          "The most recent m steps (depth) used for the Anderson acceleration. Zero"
+                          " means no acceleration.");
+
+        prm.declare_entry("Relaxation to Anderson acceleration switch",
+			  "5",
+			  Patterns::Integer(0),
+			  "If reidual is reduced CONSECUTIVELY for n steps, restart"
+			  " the Anderson acceleration");
 
         prm.declare_entry("Nonlinear solver type",
                           "Newton",
@@ -307,6 +393,9 @@ namespace PhaseField_T_and_u_and_d
         m_output_iteration_history = prm.get_bool("Output iteration history");
         m_coupling_on_heat_eq = prm.get_bool("Coupling on heat equation");
         m_degrade_conductivity = prm.get_bool("Degrade thermal conductivity");
+        m_over_relaxation_omega = prm.get_double("Over relaxation omega");
+        m_anderson_depth = prm.get_integer("Anderson acceleration depth");
+        m_omega_aa_switch = prm.get_integer("Relaxation to Anderson acceleration switch");
         m_plane_stress = prm.get_bool("Plane stress");
         m_type_nonlinear_solver = prm.get("Nonlinear solver type");
         m_type_linear_solver = prm.get("Linear solver type");
@@ -1366,8 +1455,397 @@ namespace PhaseField_T_and_u_and_d
 
     double calculate_energy_functional() const;
 
-    std::pair<double, double> calculate_total_strain_energy_and_crack_energy_dissipation() const;
+    std::pair<double, double>
+      calculate_total_strain_energy_and_crack_energy_dissipation() const;
+
+    void anderson_acceleration_step(std::list<Vector<double>> & delta_u_vector_list,
+				    std::list<Vector<double>> & delta_d_vector_list,
+				    std::list<Vector<double>> & delta_t_vector_list,
+				    std::list<Vector<double>> & u_vector_list,
+				    std::list<Vector<double>> & d_vector_list,
+				    std::list<Vector<double>> & t_vector_list,
+				    Vector<double>            & solution_displacement_diff,
+				    Vector<double>            & solution_phasefield_diff,
+				    Vector<double>            & solution_temperature_diff,
+				    Vector<double>            & solution_displacement_anderson,
+				    Vector<double>            & solution_phasefield_anderson,
+				    Vector<double>            & solution_temperature_anderson,
+    				    double                    & displacement_inc_l2,
+    				    double                    & displacement_residual_l2,
+    				    double                    & phasefield_inc_l2,
+    				    double                    & phasefield_residual_l2,
+    				    double                    & temperature_inc_l2,
+    				    double                    & temperature_residual_l2,
+    			            double                    & total_residual_l2_current,
+    			            double                    & energy_functional_current,
+				    const Vector<double>      & solution_displacement_prev_iter,
+				    const Vector<double>      & solution_phasefield_prev_iter,
+				    const Vector<double>      & solution_temperature_prev_iter);
+
+    void over_relaxation_step(Vector<double> & solution_displacement_diff,
+			      Vector<double> & solution_phasefield_diff,
+			      Vector<double> & solution_temperature_diff,
+			      unsigned int   & linear_solve_needed,
+			      double         & displacement_inc_l2,
+			      double         & displacement_residual_l2,
+			      double         & phasefield_inc_l2,
+			      double         & phasefield_residual_l2,
+			      double         & temperature_inc_l2,
+			      double         & temperature_residual_l2,
+			      double         & total_residual_l2_current,
+			      double         & energy_functional_current,
+			      const Vector<double> & solution_displacement_prev_iter,
+			      const Vector<double> & solution_phasefield_prev_iter,
+			      const Vector<double> & solution_temperature_prev_iter,
+			      const unsigned int iter_stagger);
   }; // class SplitSolveTandUandD
+
+  template <int dim>
+  void SplitSolveTandUandD<dim>::
+    anderson_acceleration_step(std::list<Vector<double>> & delta_u_vector_list,
+			       std::list<Vector<double>> & delta_d_vector_list,
+			       std::list<Vector<double>> & delta_t_vector_list,
+			       std::list<Vector<double>> & u_vector_list,
+			       std::list<Vector<double>> & d_vector_list,
+			       std::list<Vector<double>> & t_vector_list,
+			       Vector<double>            & solution_displacement_diff,
+			       Vector<double>            & solution_phasefield_diff,
+			       Vector<double>            & solution_temperature_diff,
+			       Vector<double>            & solution_displacement_anderson,
+			       Vector<double>            & solution_phasefield_anderson,
+			       Vector<double>            & solution_temperature_anderson,
+			       double                    & displacement_inc_l2,
+			       double                    & displacement_residual_l2,
+			       double                    & phasefield_inc_l2,
+			       double                    & phasefield_residual_l2,
+			       double                    & temperature_inc_l2,
+			       double                    & temperature_residual_l2,
+			       double                    & total_residual_l2_current,
+			       double                    & energy_functional_current,
+			       const Vector<double>      & solution_displacement_prev_iter,
+			       const Vector<double>      & solution_phasefield_prev_iter,
+			       const Vector<double>      & solution_temperature_prev_iter)
+  {
+    const double before_acceleration_residual = total_residual_l2_current;
+
+    solution_displacement_diff = m_solution_u
+	                       - solution_displacement_prev_iter;
+    solution_phasefield_diff = m_solution_d
+	                     - solution_phasefield_prev_iter;
+    solution_temperature_diff = m_solution_t
+    	                      - solution_temperature_prev_iter;
+
+    delta_u_vector_list.push_back(solution_displacement_diff);
+    delta_d_vector_list.push_back(solution_phasefield_diff);
+    delta_t_vector_list.push_back(solution_temperature_diff);
+
+    bool print_anderson_step = false;
+
+    if (delta_u_vector_list.size() > 1 )
+      {
+	print_anderson_step = true;
+
+	Vector<double> alpha_vector(delta_u_vector_list.size());
+
+	constrained_least_square(delta_u_vector_list,
+				 delta_d_vector_list,
+				 delta_t_vector_list,
+				 alpha_vector);
+
+	solution_displacement_anderson = 0;
+	solution_phasefield_anderson = 0;
+	solution_temperature_anderson = 0;
+
+	const auto itr_u_begin = u_vector_list.begin();
+	const auto itr_d_begin = d_vector_list.begin();
+	const auto itr_t_begin = t_vector_list.begin();
+
+	const unsigned int alpha_size = alpha_vector.size();
+
+	for (unsigned int i = 0; i < alpha_size-1; ++i)
+	  {
+	    solution_displacement_anderson += alpha_vector(i)
+					    * (*std::next(itr_u_begin, i));
+	    solution_phasefield_anderson   += alpha_vector(i)
+					    * (*std::next(itr_d_begin, i));
+	    solution_temperature_anderson += alpha_vector(i)
+	    			            * (*std::next(itr_t_begin, i));
+	  }
+	solution_displacement_anderson += alpha_vector(alpha_size-1)
+					* m_solution_u;
+	solution_phasefield_anderson += alpha_vector(alpha_size-1)
+				      * m_solution_d;
+	solution_temperature_anderson += alpha_vector(alpha_size-1)
+				       * m_solution_t;
+
+	m_solution_u = solution_displacement_anderson;
+	m_solution_d = solution_phasefield_anderson;
+	m_solution_t = solution_temperature_anderson;
+
+	solution_displacement_diff = m_solution_u - solution_displacement_prev_iter;
+	solution_phasefield_diff = m_solution_d - solution_phasefield_prev_iter;
+	solution_temperature_diff = m_solution_t - solution_temperature_prev_iter;
+
+	// Since the solutions changed, the increments also change
+	delta_u_vector_list.pop_back();
+	delta_d_vector_list.pop_back();
+	delta_t_vector_list.pop_back();
+	delta_u_vector_list.push_back(solution_displacement_diff);
+	delta_d_vector_list.push_back(solution_phasefield_diff);
+	delta_t_vector_list.push_back(solution_temperature_diff);
+
+	Vector<double> temp_solution_delta_displacement(m_dof_handler_u.n_dofs());
+        temp_solution_delta_displacement = 0.0;
+	update_qph_incremental(temp_solution_delta_displacement);
+
+	// calculate the displacement residual
+	assemble_rhs_u();
+
+	// calculate the phase-field residual
+	assemble_rhs_d();
+
+	// calculate the temperature residual
+	assemble_rhs_t();
+
+	for (unsigned int i = 0; i < m_dof_handler_d.n_dofs(); ++i)
+	  {
+	    if (m_constraints_d.is_constrained(i))
+	      {
+		solution_phasefield_diff(i) = 0.0;
+		m_system_rhs_d(i) = 0.0;
+	      }
+	  }
+	phasefield_inc_l2 = solution_phasefield_diff.l2_norm();
+	phasefield_residual_l2 = m_system_rhs_d.l2_norm();
+
+	for (unsigned int i = 0; i < m_dof_handler_u.n_dofs(); ++i)
+	  {
+	    if (m_constraints_u.is_constrained(i))
+	      {
+		solution_displacement_diff(i) = 0.0;
+		m_system_rhs_u(i) = 0.0;
+	      }
+	  }
+	displacement_inc_l2 = solution_displacement_diff.l2_norm();
+	displacement_residual_l2 = m_system_rhs_u.l2_norm();
+
+	for (unsigned int i = 0; i < m_dof_handler_t.n_dofs(); ++i)
+	  {
+	    if (m_constraints_t.is_constrained(i))
+	      {
+		solution_temperature_diff(i) = 0.0;
+		m_system_rhs_t(i) = 0.0;
+	      }
+	  }
+	temperature_inc_l2 = solution_temperature_diff.l2_norm();
+	temperature_residual_l2 = m_system_rhs_t.l2_norm();
+
+	total_residual_l2_current
+	  = std::sqrt(  displacement_residual_l2 * displacement_residual_l2
+		      + phasefield_residual_l2   * phasefield_residual_l2
+		      + temperature_residual_l2  * temperature_residual_l2 );
+
+	energy_functional_current = calculate_energy_functional();
+      } // if (delta_u_vector_list.size() > 1 )
+
+    u_vector_list.push_back(m_solution_u);
+    d_vector_list.push_back(m_solution_d);
+    t_vector_list.push_back(m_solution_t);
+
+    // The list is over-flow, we need to remove the oldest items
+    if (delta_u_vector_list.size() > m_parameters.m_anderson_depth)
+      {
+	delta_u_vector_list.pop_front();
+	delta_d_vector_list.pop_front();
+	delta_t_vector_list.pop_front();
+	u_vector_list.pop_front();
+	d_vector_list.pop_front();
+	t_vector_list.pop_front();
+      }
+
+    if (   m_parameters.m_output_iteration_history
+	&& print_anderson_step)
+      {
+	if (total_residual_l2_current < before_acceleration_residual)
+	  m_logfile << "                "
+		    << "Anderson acceleration   "
+		    << "                   "
+		    << "                   "
+		    << std::setprecision(3)
+		    << std::setw(7)
+		    << std::scientific
+		    << temperature_residual_l2 << "  "
+		    << displacement_residual_l2 << "  "
+		    << phasefield_residual_l2 << "  "
+		    << temperature_inc_l2 << "  "
+		    << displacement_inc_l2 << "  "
+		    << phasefield_inc_l2 << "  "
+		    << std::fixed << std::setprecision(6) << std::scientific
+		    << energy_functional_current
+		    << std::endl;
+	else
+	  m_logfile << "                "
+	            << "Anderson acceleration (reject)  "
+		    << "               "
+		    << "               "
+		    << std::setprecision(3)
+		    << std::setw(7)
+		    << std::scientific
+		    << temperature_residual_l2 << "  "
+		    << displacement_residual_l2 << "  "
+		    << phasefield_residual_l2 << "  "
+		    << temperature_inc_l2 << "  "
+		    << displacement_inc_l2 << "  "
+		    << phasefield_inc_l2 << "  "
+		    << std::fixed << std::setprecision(6) << std::scientific
+		    << energy_functional_current
+		    << std::endl;
+      }
+  }
+
+  template <int dim>
+  void SplitSolveTandUandD<dim>::
+   over_relaxation_step(Vector<double> & solution_displacement_diff,
+  			Vector<double> & solution_phasefield_diff,
+  			Vector<double> & solution_temperature_diff,
+  			unsigned int   & linear_solve_needed,
+  			double         & displacement_inc_l2,
+  			double         & displacement_residual_l2,
+  			double         & phasefield_inc_l2,
+  			double         & phasefield_residual_l2,
+			double         & temperature_inc_l2,
+			double         & temperature_residual_l2,
+  			double         & total_residual_l2_current,
+  			double         & energy_functional_current,
+  			const Vector<double> & solution_displacement_prev_iter,
+  			const Vector<double> & solution_phasefield_prev_iter,
+  			const Vector<double> & solution_temperature_prev_iter,
+  			const unsigned int iter_stagger)
+  {
+    (void) iter_stagger;
+
+    solution_displacement_diff = m_solution_u
+	                       - solution_displacement_prev_iter;
+    // Relaxation
+    solution_displacement_diff *= m_parameters.m_over_relaxation_omega;
+
+    // Recover the solution at the beginning of the iteration
+    m_solution_u = solution_displacement_prev_iter;
+    m_solution_d = solution_phasefield_prev_iter;
+    m_solution_t = solution_temperature_prev_iter;
+
+    update_qph_incremental(solution_displacement_diff);
+
+    m_solution_u += solution_displacement_diff;
+
+    Vector<double> temp_solution_delta_displacement(m_dof_handler_u.n_dofs());
+    temp_solution_delta_displacement = 0.0;
+
+    if (m_parameters.m_output_iteration_history)
+      m_logfile << "                "
+		   "Over-relaxation"
+		   "         " << std::flush;
+
+    // we only need to resolve temperature field if it depends on
+    // the displacement field, otherwise, temperature field does not
+    // change even after the displacement field is updated. In this case,
+    // we don't need to relax temperature field
+    if (m_parameters.m_coupling_on_heat_eq)
+      {
+	// resolve temperature problem (a linear problem)
+	//if (m_parameters.m_output_iteration_history)
+	//  m_logfile << "sub-T (l)" << std::flush;
+	temperature_step();
+	++linear_solve_needed;
+	solution_temperature_diff = m_solution_t
+				  - solution_temperature_prev_iter;
+	// Relaxation
+	solution_temperature_diff *= m_parameters.m_over_relaxation_omega;
+	m_solution_t += solution_temperature_diff;
+
+	update_qph_incremental(temp_solution_delta_displacement);
+      }
+
+    // lastly, resolve the phase-field subproblem (a linear problem)
+    //if (m_parameters.m_output_iteration_history)
+    //  m_logfile << "  sub-PF (l)" << std::flush;
+    phasefield_step();
+    ++linear_solve_needed;
+    solution_phasefield_diff = m_solution_d
+    	                     - solution_phasefield_prev_iter;
+    // Relaxation
+    solution_phasefield_diff *= m_parameters.m_over_relaxation_omega;
+    m_solution_d += solution_phasefield_diff;
+
+    update_qph_incremental(temp_solution_delta_displacement);
+
+    // calculate the displacement residual
+    assemble_rhs_u();
+
+    // calculate the phase-field residual
+    assemble_rhs_d();
+
+    // calculate the temperature residual
+    assemble_rhs_t();
+
+    for (unsigned int i = 0; i < m_dof_handler_d.n_dofs(); ++i)
+      {
+	if (m_constraints_d.is_constrained(i))
+	  {
+	    solution_phasefield_diff(i) = 0.0;
+	    m_system_rhs_d(i) = 0.0;
+	  }
+      }
+    phasefield_inc_l2 = solution_phasefield_diff.l2_norm();
+    phasefield_residual_l2 = m_system_rhs_d.l2_norm();
+
+    for (unsigned int i = 0; i < m_dof_handler_u.n_dofs(); ++i)
+      {
+	if (m_constraints_u.is_constrained(i))
+	  {
+	    solution_displacement_diff(i) = 0.0;
+	    m_system_rhs_u(i) = 0.0;
+	  }
+      }
+    displacement_inc_l2 = solution_displacement_diff.l2_norm();
+    displacement_residual_l2 = m_system_rhs_u.l2_norm();
+
+    for (unsigned int i = 0; i < m_dof_handler_t.n_dofs(); ++i)
+      {
+	if (m_constraints_t.is_constrained(i))
+	  {
+	    solution_temperature_diff(i) = 0.0;
+	    m_system_rhs_t(i) = 0.0;
+	  }
+      }
+    temperature_inc_l2 = solution_temperature_diff.l2_norm();
+    temperature_residual_l2 = m_system_rhs_t.l2_norm();
+
+    total_residual_l2_current
+      = std::sqrt(  displacement_residual_l2 * displacement_residual_l2
+		  + phasefield_residual_l2 * phasefield_residual_l2
+		  + temperature_residual_l2 * temperature_residual_l2);
+
+    energy_functional_current = calculate_energy_functional();
+
+    if (m_parameters.m_output_iteration_history)
+      {
+	m_logfile << "                   "
+	          << "                   "
+	          << std::setprecision(3)
+	    	  << std::setw(7)
+	    	  << std::scientific
+		  << temperature_residual_l2 << "  "
+		  << displacement_residual_l2 << "  "
+		  << phasefield_residual_l2 << "  "
+		  << temperature_inc_l2 << "  "
+		  << displacement_inc_l2 << "  "
+		  << phasefield_inc_l2 << "  "
+		  << std::fixed << std::setprecision(6) << std::scientific
+		  << energy_functional_current
+		  << std::endl;
+      }
+  }
 
   template <int dim>
   void SplitSolveTandUandD<dim>::read_material_data(const std::string &data_file,
@@ -4888,6 +5366,27 @@ namespace PhaseField_T_and_u_and_d
 	  m_logfile << "2D plane-strain case" << std::endl;
       }
 
+    if (std::fabs(m_parameters.m_over_relaxation_omega - 1.0) < 1.0e-6 )
+      m_logfile << "No over-relaxation for staggered scheme (omega = 1.0)." << std::endl;
+    else
+      m_logfile << "Over relaxation omega = " << m_parameters.m_over_relaxation_omega
+                << std::endl;
+
+    m_logfile << "Anderson acceleration depth = " << m_parameters.m_anderson_depth
+	      << " (0 means no Anderson acceleration)." << std::endl;
+
+    if (m_parameters.m_anderson_depth > 0)
+      {
+	AssertThrow(m_parameters.m_omega_aa_switch > 0,
+	            ExcMessage("Anderson acceleration is activated, the switch "
+	        	"has to be a positive interger."));
+        m_logfile << "Relaxation to Anderson acceleration switch = "
+                  << m_parameters.m_omega_aa_switch << std::endl;
+        m_logfile << "\tResiduals have to reduce " << m_parameters.m_omega_aa_switch
+                  << " steps before Anderson acceleration is switched on."
+		  << std::endl;
+      }
+
     m_logfile << "Nonlinear solver type for the mechanical (u) subproblem = "
 	      << m_parameters.m_type_nonlinear_solver << std::endl;
     m_logfile << "Linear solver type = " << m_parameters.m_type_linear_solver << std::endl;
@@ -5199,16 +5698,54 @@ namespace PhaseField_T_and_u_and_d
 	    Vector<double> solution_t_prev_iter(m_dof_handler_t.n_dofs());
 	    Vector<double> solution_t_diff(m_dof_handler_t.n_dofs());
 
+	    Vector<double> solution_u_anderson(m_dof_handler_u.n_dofs());
+	    Vector<double> solution_d_anderson(m_dof_handler_d.n_dofs());
+	    Vector<double> solution_t_anderson(m_dof_handler_t.n_dofs());
+
 	    if (m_parameters.m_output_iteration_history)
 	      print_conv_header();
 
 	    unsigned int linear_solve_needed = 0;
 
+	    double total_residual_l2_current = 0.0;
+	    double total_residual_l2_previous = 0.0;
+
+	    double d_inc_l2 = 0.0;
+	    double d_residual_l2 = 0.0;
+	    double u_inc_l2 = 0.0;
+	    double u_residual_l2 = 0.0;
+	    double t_inc_l2 = 0.0;
+	    double t_residual_l2 = 0.0;
+
+	    // the oldest vector is at the front of the list
+	    // the newest vector is at the back of the list
+	    // [u1, u2, u3]
+	    //   ^       ^
+	    // front    back
+	    // The first iteration (iter_stagger = 1) should NOT participate
+	    // in either the relaxation or Anderson acceleration, since
+	    // this step contains the increment of the Dirichlet BC.
+	    std::list<Vector<double>> delta_u_vector_list;
+	    std::list<Vector<double>> delta_d_vector_list;
+	    std::list<Vector<double>> delta_t_vector_list;
+	    std::list<Vector<double>> u_vector_list;
+	    std::list<Vector<double>> d_vector_list;
+	    std::list<Vector<double>> t_vector_list;
+
+	    // It is IMPORTANT that iter_stagger starts at 1 (not 0), since
+	    // it has an implication on the boundary conditions
+	    // see make_constraints_u()
 	    unsigned int iter_stagger = 1;
+
+	    bool relaxation_flag = false;
+
+	    unsigned int consecutive_residual_reduction = 0;
 
 	    for (; iter_stagger <= m_parameters.m_max_staggered_iteration;
 		 ++iter_stagger)
 	      {
+		m_timer.enter_subsection("Outer-loop iterations");
+
 		if (m_parameters.m_output_iteration_history)
 		  m_logfile << '\t' << std::setw(4) << iter_stagger
 			    << std::flush;
@@ -5288,8 +5825,8 @@ namespace PhaseField_T_and_u_and_d
 			m_system_rhs_u(i) = 0.0;
 		      }
 		  }
-		double u_inc_l2 = solution_u_diff.l2_norm();
-		double u_residual_l2 = m_system_rhs_u.l2_norm();
+		u_inc_l2 = solution_u_diff.l2_norm();
+		u_residual_l2 = m_system_rhs_u.l2_norm();
 
 		for (unsigned int i = 0; i < m_dof_handler_d.n_dofs(); ++i)
 		  {
@@ -5299,8 +5836,8 @@ namespace PhaseField_T_and_u_and_d
 			m_system_rhs_d(i) = 0.0;
 		      }
 		  }
-		double d_inc_l2 = solution_d_diff.l2_norm();
-		double d_residual_l2 = m_system_rhs_d.l2_norm();
+		d_inc_l2 = solution_d_diff.l2_norm();
+		d_residual_l2 = m_system_rhs_d.l2_norm();
 
 		for (unsigned int i = 0; i < m_dof_handler_t.n_dofs(); ++i)
 		  {
@@ -5310,8 +5847,13 @@ namespace PhaseField_T_and_u_and_d
 			m_system_rhs_t(i) = 0.0;
 		      }
 		  }
-		double t_inc_l2 = solution_t_diff.l2_norm();
-		double t_residual_l2 = m_system_rhs_t.l2_norm();
+		t_inc_l2 = solution_t_diff.l2_norm();
+		t_residual_l2 = m_system_rhs_t.l2_norm();
+
+		total_residual_l2_current
+		  = std::sqrt(  u_residual_l2 * u_residual_l2
+			      + d_residual_l2 * d_residual_l2
+			      + t_residual_l2 * t_residual_l2 );
 
 		energy_functional_current = calculate_energy_functional();
 
@@ -5329,6 +5871,7 @@ namespace PhaseField_T_and_u_and_d
 			      << std::endl;
 		  }
 
+		// We should check convergence before relaxation or acceleration
 		if (   (iter_stagger > 1)
 		    && (u_residual_l2 < m_parameters.m_tol_u_residual)
 		    && (t_residual_l2 < m_parameters.m_tol_t_residual)
@@ -5373,12 +5916,190 @@ namespace PhaseField_T_and_u_and_d
 
 		    break;
 		  }
-		else
+
+		// Combination Anderson acceleration and over-relaxation
+		// The first iteration (iter_stagger = 1) should not participate
+		// in either the relaxation or Anderson acceleration, since
+		// this step contains the increment of the Dirichlet BC.
+		// Because in the FIRST staggered iteration, inhomogeneous boundary conditions
+		// are applied, we take the full step (omega = 1.0) to properly enforce the
+		// increment of the boundary conditions. In the subsequent steps, all the increments
+		// at the Dirichlet BC are simply zero. Taking a scaled increment will not
+		// have any impact.
+		if (iter_stagger > 1)
 		  {
-		    solution_t_prev_iter = m_solution_t;
-		    solution_u_prev_iter = m_solution_u;
-		    solution_d_prev_iter = m_solution_d;
-		  }
+		    m_timer.enter_subsection("Acceleration or relaxation");
+
+		    if (!relaxation_flag)
+		      {
+			if (total_residual_l2_current <= total_residual_l2_previous)
+			  {
+			    // Anderson acceleration or do nothing
+			    if (m_parameters.m_anderson_depth > 0)
+			      {
+				Vector<double> solution_displacement_backup = m_solution_u;
+				Vector<double> solution_phasefield_backup = m_solution_d;
+				Vector<double> solution_temperature_backup = m_solution_t;
+				const double energy_functional_current_backup = energy_functional_current;
+				const double before_anderson_total_residual = total_residual_l2_current;
+
+				anderson_acceleration_step(delta_u_vector_list,
+							   delta_d_vector_list,
+							   delta_t_vector_list,
+							   u_vector_list,
+							   d_vector_list,
+							   t_vector_list,
+							   solution_u_diff,
+							   solution_d_diff,
+							   solution_t_diff,
+							   solution_u_anderson,
+							   solution_d_anderson,
+							   solution_t_anderson,
+							   u_inc_l2,
+							   u_residual_l2,
+							   d_inc_l2,
+							   d_residual_l2,
+							   t_inc_l2,
+							   t_residual_l2,
+							   total_residual_l2_current,
+							   energy_functional_current,
+							   solution_u_prev_iter,
+							   solution_d_prev_iter,
+							   solution_t_prev_iter);
+
+				// Anderson acceleration made the residual increase,
+				// switch to relaxtion in the following step
+				// recover the state before Anderson acceleration
+				if (total_residual_l2_current > before_anderson_total_residual)
+				  {
+				    relaxation_flag = true;
+				    m_solution_u = solution_displacement_backup;
+				    m_solution_d = solution_phasefield_backup;
+				    m_solution_t = solution_temperature_backup;
+				    energy_functional_current = energy_functional_current_backup;
+				    total_residual_l2_current = before_anderson_total_residual;
+				  }
+			      } // Anderson acceleration or do nothing
+			  } // total_residual_l2_current < total_residual_l2_previous
+			else
+			  {
+			    // Over-relaxation (if omega = 1.0, no relaxation, do nothing)
+			    // we apply relaxation and recalculate solution increment and residual
+			    if (std::fabs(m_parameters.m_over_relaxation_omega - 1.0) > 1.0e-6)
+			      {
+				over_relaxation_step(solution_u_diff,
+						     solution_d_diff,
+						     solution_t_diff,
+						     linear_solve_needed,
+						     u_inc_l2,
+						     u_residual_l2,
+						     d_inc_l2,
+						     d_residual_l2,
+						     t_inc_l2,
+						     t_residual_l2,
+						     total_residual_l2_current,
+						     energy_functional_current,
+						     solution_u_prev_iter,
+						     solution_d_prev_iter,
+						     solution_t_prev_iter,
+						     iter_stagger);
+			      }
+
+			    // reset relaxation_flag
+			    relaxation_flag = true;
+			  }
+		      } // !relaxation_flag
+		    else
+		      {
+			if (   consecutive_residual_reduction < m_parameters.m_omega_aa_switch
+			    || total_residual_l2_current > total_residual_l2_previous )
+			  {
+			    if (total_residual_l2_current <= total_residual_l2_previous)
+			      ++consecutive_residual_reduction;
+			    else // consecutive reduction is interupted, recount
+			      consecutive_residual_reduction = 0;
+
+			    // Over-relaxation (if omega = 1.0, no relaxation, do nothing)
+			    // we apply relaxation and recalculate solution increment and residual
+			    // we only apply over-relaxation if the residuals goes up,
+			    // otherwise do nothing (a regular iteration step without relaxation or
+			    // acceleration)
+			    if (   std::fabs(m_parameters.m_over_relaxation_omega - 1.0) > 1.0e-6
+				&& total_residual_l2_current > total_residual_l2_previous)
+			      {
+				over_relaxation_step(solution_u_diff,
+						     solution_d_diff,
+						     solution_t_diff,
+						     linear_solve_needed,
+						     u_inc_l2,
+						     u_residual_l2,
+						     d_inc_l2,
+						     d_residual_l2,
+						     t_inc_l2,
+						     t_residual_l2,
+						     total_residual_l2_current,
+						     energy_functional_current,
+						     solution_u_prev_iter,
+						     solution_d_prev_iter,
+						     solution_t_prev_iter,
+						     iter_stagger);
+			      }
+			  }
+			else
+			  {
+			    // Anderson acceleration or do nothing
+			    if (m_parameters.m_anderson_depth > 0)
+			      {
+				// restart Anderson acceleration
+				delta_u_vector_list.clear();
+				delta_d_vector_list.clear();
+				delta_t_vector_list.clear();
+				u_vector_list.clear();
+				d_vector_list.clear();
+				t_vector_list.clear();
+
+				anderson_acceleration_step(delta_u_vector_list,
+							   delta_d_vector_list,
+							   delta_t_vector_list,
+							   u_vector_list,
+							   d_vector_list,
+							   t_vector_list,
+							   solution_u_diff,
+							   solution_d_diff,
+							   solution_t_diff,
+							   solution_u_anderson,
+							   solution_d_anderson,
+							   solution_t_anderson,
+							   u_inc_l2,
+							   u_residual_l2,
+							   d_inc_l2,
+							   d_residual_l2,
+							   t_inc_l2,
+							   t_residual_l2,
+							   total_residual_l2_current,
+							   energy_functional_current,
+							   solution_u_prev_iter,
+							   solution_d_prev_iter,
+							   solution_t_prev_iter);
+			      } // Anderson acceleration or do nothing
+
+			    // reset relaxation_flag
+			    relaxation_flag = false;
+
+			    // reset consecutive residual reduction count
+			    consecutive_residual_reduction = 0;
+			  }
+		      } // relaxation_flag == true
+
+		    m_timer.leave_subsection();
+		  } // iter_am > 1
+
+		  total_residual_l2_previous = total_residual_l2_current;
+		  solution_t_prev_iter = m_solution_t;
+		  solution_u_prev_iter = m_solution_u;
+		  solution_d_prev_iter = m_solution_d;
+
+		  m_timer.leave_subsection();
 	      } // 	for (; iter_stagger <= m_parameters.m_max_staggered_iteration; ++iter_stagger)
 
 	    if (iter_stagger > m_parameters.m_max_staggered_iteration)
