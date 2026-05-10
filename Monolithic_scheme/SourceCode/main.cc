@@ -112,6 +112,7 @@
 #include "SpectrumDecomposition.h"
 #include "Utilities.h"
 
+
 namespace PhaseField_monolithic
 {
   using namespace dealii;
@@ -176,6 +177,66 @@ namespace PhaseField_monolithic
     return 2.0;
   }
 
+  inline double phasefield_geometry_function(const double d,
+					     const std::string & model_name)
+  {
+    double value = 0.0;
+    if (model_name == "AT2")
+      value = d * d;
+    else if (model_name == "AT1")
+      value = d;
+    else
+      Assert(false,
+	     ExcMessage("The phase-field geometric function has not been implemented!"));
+
+    return value;
+  }
+
+  inline double phasefield_geometry_function_derivative(const double d,
+  							const std::string & model_name)
+  {
+    double value = 0.0;
+    if (model_name == "AT2")
+      value = 2.0 * d;
+    else if (model_name == "AT1")
+      value = 1.0;
+    else
+      Assert(false,
+	     ExcMessage("The phase-field geometric function has not been implemented!"));
+
+    return value;
+  }
+
+  inline double phasefield_geometry_function_2nd_order_derivative(const double d,
+				  				  const std::string & model_name)
+  {
+    (void) d;
+    double value = 0.0;
+    if (model_name == "AT2")
+      value = 2.0;
+    else if (model_name == "AT1")
+      value = 0.0;
+    else
+      Assert(false,
+	   ExcMessage("The phase-field geometric function has not been implemented!"));
+
+    return value;
+  }
+
+  inline double phasefield_coefficient_constant(const std::string & model_name)
+  {
+    double value = 0.0;
+    if (model_name == "AT2")
+      value = 2.0;
+    else if (model_name == "AT1")
+      value = 8.0/3;
+    else
+      Assert(false,
+	     ExcMessage("The phase-field geometric function has not been implemented!"));
+
+    return value;
+  }
+
   namespace Parameters
   {
     struct Scenario
@@ -183,6 +244,7 @@ namespace PhaseField_monolithic
       unsigned int m_scenario;
       std::string m_logfile_name;
       bool m_output_iteration_history;
+      std::string m_phasefield_name;
       bool m_coupling_on_heat_eq;
       bool m_degrade_conductivity;
       bool m_plane_stress;
@@ -227,6 +289,11 @@ namespace PhaseField_monolithic
 			  "yes",
                           Patterns::Selection("yes|no"),
 			  "Shall we write iteration history to the log file?");
+
+        prm.declare_entry("Phase-field model type",
+                          "AT2",
+                          Patterns::Selection("AT1|AT2"),
+                          "Type of phase-field model");
 
         prm.declare_entry("Coupling on heat equation",
 			  "no",
@@ -345,6 +412,7 @@ namespace PhaseField_monolithic
         m_scenario = prm.get_integer("Scenario number");
         m_logfile_name = prm.get("Log file name");
         m_output_iteration_history = prm.get_bool("Output iteration history");
+        m_phasefield_name = prm.get("Phase-field model type");
         m_coupling_on_heat_eq = prm.get_bool("Coupling on heat equation");
         m_degrade_conductivity = prm.get_bool("Degrade thermal conductivity");
         m_plane_stress = prm.get_bool("Plane stress");
@@ -731,6 +799,7 @@ namespace PhaseField_monolithic
 					   const double max_temperature,
 					   const double b_1,
 					   const double b_2,
+					   const std::string & phasefield_name,
 					   const bool   plane_stress_flag)
       : m_lame_lambda(lame_lambda)
       , m_lame_mu(lame_mu)
@@ -745,6 +814,7 @@ namespace PhaseField_monolithic
       , m_max_t(max_temperature)
       , m_b_1(b_1)
       , m_b_2(b_2)
+      , m_phasefield_name(phasefield_name)
       , m_plane_stress(plane_stress_flag)
       , m_phase_field_value(0.0)
       , m_grad_phasefield(Tensor<1, dim>())
@@ -886,6 +956,7 @@ namespace PhaseField_monolithic
     const double m_max_t;
     const double m_b_1;
     const double m_b_2;
+    const std::string m_phasefield_name;
     const bool m_plane_stress;
     double m_phase_field_value;
     Tensor<1, dim> m_grad_phasefield;
@@ -996,9 +1067,15 @@ namespace PhaseField_monolithic
 
     m_strain_energy_total = degradation * m_strain_energy_positive + m_strain_energy_negative;
 
+    const double phase_field_geo_value = phasefield_geometry_function(m_phase_field_value,
+        							      m_phasefield_name);
+    const double phase_field_coeff_constant = phasefield_coefficient_constant(m_phasefield_name);
+
     // The critical energy release rate m_gc should be temperature-dependent.
-    m_crack_energy_dissipation = m_gc_t * (  0.5 / m_length_scale * m_phase_field_value * m_phase_field_value
-	                                   + 0.5 * m_length_scale * m_grad_phasefield * m_grad_phasefield)
+    m_crack_energy_dissipation = m_gc_t * (  1.0 / phase_field_coeff_constant / m_length_scale
+                                           * phase_field_geo_value
+                                           + m_length_scale / phase_field_coeff_constant
+                                           * m_grad_phasefield * m_grad_phasefield)
 	                                   // the term due to viscosity regularization
 	                                   + (m_phase_field_value - phase_field_value_previous_step)
 					   * (m_phase_field_value - phase_field_value_previous_step)
@@ -1044,9 +1121,12 @@ namespace PhaseField_monolithic
 		   const double max_temperature,
 		   const double b_1,
 		   const double b_2,
+		   const std::string & phasefield_name,
 		   const bool   coupling_on_heat_eq,
 		   const bool   plane_stress_flag)
     {
+      const double phasefield_geo_constant = phasefield_coefficient_constant(phasefield_name);
+
       m_material =
               std::make_shared<LinearIsotropicElasticityAdditiveSplit<dim>>(lame_lambda,
         	                                                            lame_mu,
@@ -1061,8 +1141,17 @@ namespace PhaseField_monolithic
 									    max_temperature,
 									    b_1,
 									    b_2,
+									    phasefield_name,
 									    plane_stress_flag);
-      m_history_max_positive_strain_energy = 0.0;
+
+      if (phasefield_name == "AT2")
+      	m_history_max_positive_strain_energy = 0.0;
+      else if (phasefield_name == "AT1")
+	m_history_max_positive_strain_energy = gc_0/(2*length_scale*phasefield_geo_constant);
+      else
+	AssertThrow(false,
+	      ExcMessage("The phase-field geometric function has not been implemented!"));
+
       m_length_scale = length_scale;
       m_viscosity = viscosity;
       m_heat_capacity = heat_capacity;
@@ -1592,9 +1681,9 @@ namespace PhaseField_monolithic
             poisson_ratio = lame_lambda / (2*(lame_lambda + lame_mu));
             Assert( (poisson_ratio <= 0.5)&(poisson_ratio >=-1.0) , ExcInternalError());
 
-            if (reference_temperature != m_parameters.m_ref_temperature)
-              Assert(false, ExcMessage("Reference temperature inconsistent "
-        	  "in the parameters.prm file and materialDataFile"));
+            AssertThrow(reference_temperature == m_parameters.m_ref_temperature,
+			ExcMessage("Reference temperature inconsistent "
+        	                   "in the parameters.prm file and materialDataFile"));
 
             m_logfile << "\tRegion " << material_region << " : " << std::endl;
             m_logfile << "\t\tLame lambda = " << lame_lambda << std::endl;
@@ -1739,6 +1828,7 @@ namespace PhaseField_monolithic
 				   heat_capacity, thermal_conductivity_0,
 				   thermal_expansion_coeff, reference_temperature,
 				   max_temperature, b_1, b_2,
+				   m_parameters.m_phasefield_name,
 				   m_parameters.m_coupling_on_heat_eq,
 				   m_parameters.m_plane_stress);
       }
@@ -2831,14 +2921,14 @@ namespace PhaseField_monolithic
 
     AssertThrow(dim==3, ExcMessage("The dimension has to be 3D!"));
 
-    double const length = 25.0; //mm
-    double const width  = 10.0;  //mm
-    double const thickness = 1.0;  //mm
+    double const length = 5.0; //mm
+    double const width  = 1.0;  //mm
+    double const thickness = 0.4;  //mm
 
     std::vector<unsigned int> repetitions(dim, 1);
-    repetitions[0] = 125;
-    repetitions[1] = 50;
-    repetitions[2] = 5;
+    repetitions[0] = 50;
+    repetitions[1] = 10;
+    repetitions[2] = 4;
 
     GridGenerator::subdivided_hyper_rectangle(m_triangulation,
 					      repetitions,
@@ -2881,7 +2971,7 @@ namespace PhaseField_monolithic
 	    initiation_point_refine_unfinished = false;
 	    for (const auto &cell : m_triangulation.active_cell_iterators())
 	      {
-		if (cell->center()[1] < 0.13)
+		if (cell->center()[1] < 0.2)
 		  {
 		    // Because the mesh is not imported from gmsh, there is no
 		    // material ID associated with each cell. We need to manually
@@ -4313,6 +4403,12 @@ namespace PhaseField_monolithic
           scratch.m_symm_grad_Nx_disp[q_point];
         const double JxW = scratch.m_fe_values.JxW(q_point);
 
+        const double phasefield_coeff_const = phasefield_coefficient_constant(m_parameters.m_phasefield_name);
+
+	const double phasefield_geo_derivative
+		   = phasefield_geometry_function_derivative(phasefield_value,
+							     m_parameters.m_phasefield_name);
+
         SymmetricTensor<2, dim> symm_grad_Nx_i_x_C;
 
         for (const unsigned int i : scratch.m_fe_values.dof_indices())
@@ -4328,12 +4424,14 @@ namespace PhaseField_monolithic
               }
             else if (i_group == m_d_dof)
               {
-    	        data.m_cell_rhs(i) += (    gc_t * length_scale * grad_N_phasefield[i] * phasefield_grad
-    	                                +  (   gc_t / length_scale * phasefield_value
-					     + eta / delta_time  * (phasefield_value - old_phasefield)
-					     + degradation_function_derivative(phasefield_value) * history_value )
-					  * N_phasefield[i]
-				      ) * JxW;
+		data.m_cell_rhs(i) += (  2.0 * gc_t * length_scale / phasefield_coeff_const
+						    * grad_N_phasefield[i] * phasefield_grad
+				             +  (   gc_t / length_scale / phasefield_coeff_const
+						  * phasefield_geo_derivative
+						  + eta / delta_time  * (phasefield_value - old_phasefield)
+						  + degradation_function_derivative(phasefield_value)
+						  * history_value ) * N_phasefield[i]
+				       ) * JxW;
               }
             else if (i_group == m_t_dof)
               {
@@ -4496,6 +4594,12 @@ namespace PhaseField_monolithic
           scratch.m_symm_grad_Nx_disp[q_point];
         const double JxW = scratch.m_fe_values.JxW(q_point);
 
+        const double phasefield_coeff_const = phasefield_coefficient_constant(m_parameters.m_phasefield_name);
+
+	const double phasefield_geo_2nd_order_derivative
+		   = phasefield_geometry_function_2nd_order_derivative(phasefield_value,
+								       m_parameters.m_phasefield_name);
+
         SymmetricTensor<2, dim> symm_grad_Nx_i_x_C;
 
         for (const unsigned int i : scratch.m_fe_values.dof_indices())
@@ -4517,12 +4621,15 @@ namespace PhaseField_monolithic
                   }
                 else if ((i_group == j_group) && (i_group == m_d_dof))
                   {
-                    data.m_cell_matrix(i, j) += (  (   gc_t/length_scale + eta/delta_time
-                	                             + degradation_function_2nd_order_derivative(phasefield_value)
-						     * history_value  )
-                	                          * N_phasefield[i] * N_phasefield[j]
-					          + gc_t * length_scale * grad_N_phasefield[i] * grad_N_phasefield[j]
-					        ) * JxW;
+                    data.m_cell_matrix(i, j) += (  (   gc_t/length_scale/phasefield_coeff_const
+                    			             * phasefield_geo_2nd_order_derivative
+                    				     + eta/delta_time
+                    				     + degradation_function_2nd_order_derivative(phasefield_value)
+                    				     * history_value  )
+                    			          * N_phasefield[i] * N_phasefield[j]
+                    				  + 2.0 / phasefield_coeff_const * gc_t * length_scale
+                    			          * grad_N_phasefield[i] * grad_N_phasefield[j]
+                    			        ) * JxW;
                   }
                 else if ((i_group == j_group) && (i_group == m_t_dof))
                   {
@@ -6202,6 +6309,8 @@ namespace PhaseField_monolithic
     m_logfile << "Log file = " << m_parameters.m_logfile_name << std::endl;
     m_logfile << "Write iteration history to log file? = " << std::boolalpha
 	      << m_parameters.m_output_iteration_history << std::endl;
+
+    m_logfile << "Phase-field model type = " << m_parameters.m_phasefield_name << std::endl;
 
     m_logfile << "Does the heat equation contain the coupling term? = " << std::boolalpha
 	      << m_parameters.m_coupling_on_heat_eq << std::endl;
