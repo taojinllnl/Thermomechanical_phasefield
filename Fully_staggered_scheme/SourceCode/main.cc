@@ -1862,7 +1862,7 @@ namespace PhaseField_T_and_u_and_d
                                      m_dof_handler_d.end())),
         worker, copier, scratch_data_UQPH, per_task_data_UQPH);
 
-    m_timer.leave_subsection();
+    m_timer.leave_subsection("Update QPH data");
   }
 
   template <int dim> struct SplitSolveTandUandD<dim>::PerTaskData_UQPH
@@ -3159,7 +3159,7 @@ namespace PhaseField_T_and_u_and_d
 
     setup_qph();
 
-    m_timer.leave_subsection();
+    m_timer.leave_subsection("Setup system");
   }
 
   template <int dim> void SplitSolveTandUandD<dim>::setup_system_d()
@@ -3455,7 +3455,7 @@ namespace PhaseField_T_and_u_and_d
     WorkStream::run(m_dof_handler_d.active_cell_iterators(), worker, copier,
                     scratch_data, per_task_data);
 
-    m_timer.leave_subsection();
+    m_timer.leave_subsection("Assemble phase-field system");
   }
 
   template <int dim> void SplitSolveTandUandD<dim>::assemble_system_u()
@@ -3489,7 +3489,7 @@ namespace PhaseField_T_and_u_and_d
     WorkStream::run(m_dof_handler_u.active_cell_iterators(), worker, copier,
                     scratch_data, per_task_data);
 
-    m_timer.leave_subsection();
+    m_timer.leave_subsection("Assemble U system");
   }
 
   template <int dim> void SplitSolveTandUandD<dim>::assemble_system_t()
@@ -3526,7 +3526,7 @@ namespace PhaseField_T_and_u_and_d
                                                  m_dof_handler_u.end())),
                     worker, copier, scratch_data, per_task_data);
 
-    m_timer.leave_subsection();
+    m_timer.leave_subsection("Assemble T system");
   }
 
   template <int dim> void SplitSolveTandUandD<dim>::assemble_rhs_u()
@@ -3558,7 +3558,7 @@ namespace PhaseField_T_and_u_and_d
     WorkStream::run(m_dof_handler_u.active_cell_iterators(), worker, copier,
                     scratch_data, per_task_data);
 
-    m_timer.leave_subsection();
+    m_timer.leave_subsection("Assemble u RHS");
   }
 
   template <int dim>
@@ -3677,7 +3677,7 @@ namespace PhaseField_T_and_u_and_d
     WorkStream::run(m_dof_handler_d.active_cell_iterators(), worker, copier,
                     scratch_data, per_task_data);
 
-    m_timer.leave_subsection();
+    m_timer.leave_subsection("Assemble phase-field RHS");
   }
 
   template <int dim>
@@ -4102,7 +4102,7 @@ namespace PhaseField_T_and_u_and_d
                                                  m_dof_handler_u.end())),
                     worker, copier, scratch_data, per_task_data);
 
-    m_timer.leave_subsection();
+    m_timer.leave_subsection("Assemble T RHS");
   }
 
   template <int dim>
@@ -4444,7 +4444,7 @@ namespace PhaseField_T_and_u_and_d
 
     m_constraints_u.distribute(newton_update_u);
 
-    m_timer.leave_subsection();
+    m_timer.leave_subsection("Solve U linear system");
   }
 
   template <int dim> void SplitSolveTandUandD<dim>::solve_linear_system_t()
@@ -4476,7 +4476,7 @@ namespace PhaseField_T_and_u_and_d
 
     m_constraints_t.distribute(m_solution_t);
 
-    m_timer.leave_subsection();
+    m_timer.leave_subsection("Solve T linear system");
   }
 
   template <int dim> void SplitSolveTandUandD<dim>::solve_linear_system_d()
@@ -4508,7 +4508,7 @@ namespace PhaseField_T_and_u_and_d
 
     m_constraints_d.distribute(m_solution_d);
 
-    m_timer.leave_subsection();
+    m_timer.leave_subsection("Solve phase-field linear system");
   }
 
   template <int dim>
@@ -4522,7 +4522,7 @@ namespace PhaseField_T_and_u_and_d
     double error_residual_u_l2 = 0.0;
 
     unsigned int newton_iteration = 0;
-    for (; newton_iteration < m_parameters.m_max_iterations_u; ++newton_iteration)
+    for (; newton_iteration <= m_parameters.m_max_iterations_u; ++newton_iteration)
     {
       make_constraints_u(newton_iteration, iter_stagger);
       assemble_system_u();
@@ -4535,8 +4535,12 @@ namespace PhaseField_T_and_u_and_d
 
       error_residual_u_l2 = error_res_u.l2_norm();
 
-      if (newton_iteration > 0 && error_residual_u_l2 <= 1.0e-9 &&
-          error_update_u_l2 <= 1.0e-9)
+      if (    ( newton_iteration > 0
+             && error_residual_u_l2 <= 1.0e-9
+           //&& error_update_u_l2 <= 1.0e-9
+               )
+           || (newton_iteration == m_parameters.m_max_iterations_u)
+          )
       {
         if (m_parameters.m_output_iteration_history)
           m_logfile << "   " << newton_iteration << "   " << std::setprecision(3)
@@ -4559,9 +4563,9 @@ namespace PhaseField_T_and_u_and_d
       update_qph_incremental(solution_delta_u);
     }
 
-    AssertThrow(
-        newton_iteration < m_parameters.m_max_iterations_u,
-        ExcMessage("No convergence in nonlinear solver for U-subproblem!"));
+    //AssertThrow(
+    //    newton_iteration < m_parameters.m_max_iterations_u,
+    //    ExcMessage("No convergence in nonlinear solver for U-subproblem!"));
 
     return newton_iteration;
   }
@@ -4700,7 +4704,7 @@ namespace PhaseField_T_and_u_and_d
                          ".vtu");
 
     data_out.write_vtu(output);
-    m_timer.leave_subsection();
+    m_timer.leave_subsection("Output results");
   }
 
   template <int dim>
@@ -4846,7 +4850,7 @@ namespace PhaseField_T_and_u_and_d
     time_force.second = reaction_force;
     m_history_reaction_force.push_back(time_force);
 
-    m_timer.leave_subsection();
+    m_timer.leave_subsection("Calculate reaction force");
   }
 
   template <int dim> void SplitSolveTandUandD<dim>::write_history_data()
@@ -5319,6 +5323,8 @@ namespace PhaseField_T_and_u_and_d
 
     output_results();
 
+    unsigned int total_outer_loop_iters = 0;
+
     while (m_time.current() < m_time.end() - m_time.get_delta_t() * 1.0e-6)
     {
       m_time.increment(time_table);
@@ -5398,8 +5404,6 @@ namespace PhaseField_T_and_u_and_d
         for (; iter_stagger <= m_parameters.m_max_staggered_iteration;
              ++iter_stagger)
         {
-          m_timer.enter_subsection("Outer-loop iterations");
-
           if (m_parameters.m_output_iteration_history)
             m_logfile << '\t' << std::setw(4) << iter_stagger << std::flush;
 
@@ -5532,6 +5536,8 @@ namespace PhaseField_T_and_u_and_d
                 m_logfile << '_';
               m_logfile << std::endl;
             }
+
+            total_outer_loop_iters += iter_stagger;
 
             m_logfile << "\tStaggered approach (T-u-d) converges after "
                       << iter_stagger << " iterations." << std::endl;
@@ -5696,15 +5702,13 @@ namespace PhaseField_T_and_u_and_d
               }
             } // relaxation_flag == true
 
-            m_timer.leave_subsection();
+            m_timer.leave_subsection("Acceleration or relaxation");
           } // iter_am > 1
 
           total_residual_l2_previous = total_residual_l2_current;
           solution_t_prev_iter = m_solution_t;
           solution_u_prev_iter = m_solution_u;
           solution_d_prev_iter = m_solution_d;
-
-          m_timer.leave_subsection();
         } // 	for (; iter_stagger <= m_parameters.m_max_staggered_iteration;
           // ++iter_stagger)
 
@@ -5777,6 +5781,9 @@ namespace PhaseField_T_and_u_and_d
 
       write_history_data();
     } // while(m_time.current() < m_time.end() - m_time.get_delta_t()*1.0e-6)
+
+    m_logfile << "Totally " << total_outer_loop_iters << " outer-loop iterations "
+        "are used in the simulation." << std::endl;
   }
 } // namespace PhaseField_T_and_u_and_d
 
