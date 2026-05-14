@@ -16,16 +16,13 @@ subsection Scenario
   # Shall we write the iteration history to the log file? (yes or no)
   set Output iteration history = yes
   
-  # Choose phase-field model type (AT1 or AT2)
-  set Phase-field model type = AT2
-
   # Does the heat conduciton equaiton contains the mechanical coupling term? (yes or no)
   set Coupling on heat equation = no
 
   # Is the thermal conductivity degraded by phasefield? (yes or no)
   set Degrade thermal conductivity = no
 
-  #If it is 2D, is it plane-stress? (yes or no)
+  # If it is 2D, is it plane-stress? (yes or no)
   set Plane stress = yes
 
   # Over relaxation omega (1.0 means no relaxation)

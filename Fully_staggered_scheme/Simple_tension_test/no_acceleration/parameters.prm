@@ -30,7 +30,7 @@ subsection Scenario
 
   # Linear solver type (Direct or CG)
   set Linear solver type = CG
-  
+
   # Mesh refinement strategy (pre-refine or adaptive-refine)
   set Mesh refinement strategy = pre-refine
 
