@@ -7,7 +7,7 @@ subsection Scenario
   # 3 - square tension (2D structured mesh)
   # 4 - square shear   (2D structured mesh)
   # 5 - quenching test (2D structured mesh, quarter size)
-  # 5 - quenching test (2D structured mesh, half size)
+  # 6 - quenching test (2D structured mesh, half size)
   set Scenario number = 6
   
   # Name of the log file
@@ -16,6 +16,9 @@ subsection Scenario
   # Shall we write the iteration history to the log file? (yes or no)
   set Output iteration history = yes
   
+  # Choose phase-field model type (AT1 or AT2)
+  set Phase-field model type = AT2
+
   # Does the heat conduciton equaiton contains the mechanical coupling term? (yes or no)
   set Coupling on heat equation = no
 
@@ -40,7 +43,7 @@ subsection Scenario
 
   # Linear solver type (Direct or CG)
   set Linear solver type = CG
-  
+
   # Mesh refinement strategy (pre-refine or adaptive-refine)
   set Mesh refinement strategy = pre-refine
 
