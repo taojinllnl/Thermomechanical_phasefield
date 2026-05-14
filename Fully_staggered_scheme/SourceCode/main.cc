@@ -1190,6 +1190,7 @@ namespace PhaseField_T_and_u_and_d
     void make_grid_case_4();
     void make_grid_case_5();
     void make_grid_case_6();
+    void make_grid_case_7();
 
     void setup_system();
     void setup_system_u();
@@ -2531,6 +2532,8 @@ namespace PhaseField_T_and_u_and_d
       make_grid_case_5();
     else if (m_parameters.m_scenario == 6)
       make_grid_case_6();
+    else if (m_parameters.m_scenario == 7)
+      make_grid_case_7();
     else
       Assert(false, ExcMessage("The scenario has not been implemented!"));
 
@@ -3125,6 +3128,93 @@ namespace PhaseField_T_and_u_and_d
     }
   }
 
+  template <int dim> void SplitSolveTandUandD<dim>::make_grid_case_7()
+  {
+    for (unsigned int i = 0; i < 80; ++i)
+      m_logfile << "*";
+    m_logfile << std::endl;
+    m_logfile << "\t\t\t\tQuenching test (3D, one side)" << std::endl;
+    for (unsigned int i = 0; i < 80; ++i)
+      m_logfile << "*";
+    m_logfile << std::endl;
+
+    AssertThrow(dim == 3, ExcMessage("The dimension has to be 3D!"));
+
+    double const length = 5.0;    // mm
+    double const width = 1.0;     // mm
+    double const thickness = 0.2; // mm
+
+    std::vector<unsigned int> repetitions(dim, 1);
+    repetitions[0] = 50;
+    repetitions[1] = 10;
+    repetitions[2] = 2;
+
+    GridGenerator::subdivided_hyper_rectangle(
+        m_triangulation, repetitions, Point<dim>(0.0, 0.0, 0.0),
+        Point<dim>(length, width, thickness));
+
+    for (const auto &cell : m_triangulation.active_cell_iterators())
+      for (const auto &face : cell->face_iterators())
+      {
+        if (face->at_boundary() == true)
+        {
+          if (std::fabs(face->center()[0] - 0.0) < 1.0e-9)
+            face->set_boundary_id(0);
+          else if (std::fabs(face->center()[1] - 0.0) < 1.0e-9)
+            face->set_boundary_id(1);
+          else if (std::fabs(face->center()[2] - 0.0) < 1.0e-9)
+            face->set_boundary_id(2);
+          else if (std::fabs(face->center()[0] - length) < 1.0e-9)
+            face->set_boundary_id(3);
+          else if (std::fabs(face->center()[1] - width) < 1.0e-9)
+            face->set_boundary_id(4);
+          else if (std::fabs(face->center()[2] - thickness) < 1.0e-9)
+            face->set_boundary_id(5);
+          else
+            face->set_boundary_id(6);
+        }
+      }
+
+    if (m_parameters.m_refinement_strategy == "pre-refine")
+    {
+      m_triangulation.refine_global(m_parameters.m_global_refine_times);
+    }
+    else if (m_parameters.m_refinement_strategy == "adaptive-refine")
+    {
+      unsigned int material_id;
+      double length_scale;
+      bool initiation_point_refine_unfinished = true;
+      while (initiation_point_refine_unfinished)
+      {
+        initiation_point_refine_unfinished = false;
+        for (const auto &cell : m_triangulation.active_cell_iterators())
+        {
+          if (cell->center()[1] < 0.2)
+          {
+            // Because the mesh is not imported from gmsh, there is no
+            // material ID associated with each cell. We need to manually
+            // set this ID based on the materialDateFIle
+            material_id = cell->material_id();
+            length_scale = m_material_data[material_id][2];
+            if (std::cbrt(cell->measure()) >
+                length_scale * m_parameters.m_allowed_max_h_l_ratio)
+            {
+              cell->set_refine_flag();
+              initiation_point_refine_unfinished = true;
+            }
+          }
+        }
+        m_triangulation.execute_coarsening_and_refinement();
+      }
+    }
+    else
+    {
+      AssertThrow(
+          false,
+          ExcMessage("Selected mesh refinement strategy not implemented!"));
+    }
+  }
+
   template <int dim> void SplitSolveTandUandD<dim>::setup_system()
   {
     m_timer.enter_subsection("Setup system");
@@ -3274,6 +3364,27 @@ namespace PhaseField_T_and_u_and_d
         }
       }
     }
+    else if (m_parameters.m_scenario == 7)
+    {
+      for (unsigned int i = 0; i < m_dof_handler_t.n_dofs(); ++i)
+      {
+        m_solution_t(i) = m_parameters.m_ref_temperature;
+      }
+
+      const double cool_down_temperature = 293.15; // Kelvin
+
+      std::map<types::global_dof_index, Point<dim>> support_points_T;
+      support_points_T =
+          DoFTools::map_dofs_to_support_points(MappingQ1<dim>(), m_dof_handler_t);
+
+      for (auto const &item : support_points_T)
+      {
+        if (std::fabs(item.second[1] - 0.0) < 1.0e-9)
+        {
+          m_solution_t(item.first) = cool_down_temperature;
+        }
+      }
+    }
     else
     {
       Assert(false, ExcMessage("The scenario has not been implemented!"));
@@ -3407,6 +3518,36 @@ namespace PhaseField_T_and_u_and_d
         }
         m_constraints_u.add_line(node_xy[1]);
         m_constraints_u.set_inhomogeneity(node_xy[1], 0.0);
+      }
+      else if (m_parameters.m_scenario == 7)
+      {
+        const int boundary_id_left_surface_x = 0;
+        VectorTools::interpolate_boundary_values(
+            m_dof_handler_u, boundary_id_left_surface_x,
+            Functions::ZeroFunction<dim>(dim), m_constraints_u,
+            m_fe_u.component_mask(x_displacement));
+        const int boundary_id_right_surface_x = 3;
+        VectorTools::interpolate_boundary_values(
+            m_dof_handler_u, boundary_id_right_surface_x,
+            Functions::ZeroFunction<dim>(dim), m_constraints_u,
+            m_fe_u.component_mask(x_displacement));
+
+        const int boundary_id_front_surface_z = 2;
+        VectorTools::interpolate_boundary_values(
+            m_dof_handler_u, boundary_id_front_surface_z,
+            Functions::ZeroFunction<dim>(dim), m_constraints_u,
+            m_fe_u.component_mask(z_displacement));
+        const int boundary_id_back_surface_z = 5;
+        VectorTools::interpolate_boundary_values(
+            m_dof_handler_u, boundary_id_back_surface_z,
+            Functions::ZeroFunction<dim>(dim), m_constraints_u,
+            m_fe_u.component_mask(z_displacement));
+
+        const int boundary_id_top_surface_y = 4;
+        VectorTools::interpolate_boundary_values(
+            m_dof_handler_u, boundary_id_top_surface_y,
+            Functions::ZeroFunction<dim>(dim), m_constraints_u,
+            m_fe_u.component_mask(y_displacement));
       }
       else
         Assert(false, ExcMessage("The scenario has not been implemented!"));
@@ -4404,6 +4545,20 @@ namespace PhaseField_T_and_u_and_d
       const int boundary_id_top_surface = 3;
       VectorTools::interpolate_boundary_values(
           m_dof_handler_t, boundary_id_top_surface,
+          Functions::ConstantFunction<dim>(cool_down_temperature),
+          m_constraints_t);
+    }
+    else if (m_parameters.m_scenario == 7)
+    {
+      // Since the thermal problem is linear, we directly set the temperature at
+      // the boundaries. This is different from nonlinear iterations where we set
+      // increment at boundaries.
+      const double cool_down_temperature = 293.15; // Kelvin
+
+      const int boundary_id_bottom_surface_y = 1;
+
+      VectorTools::interpolate_boundary_values(
+          m_dof_handler_t, boundary_id_bottom_surface_y,
           Functions::ConstantFunction<dim>(cool_down_temperature),
           m_constraints_t);
     }
