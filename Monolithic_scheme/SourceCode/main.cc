@@ -3653,7 +3653,7 @@ namespace PhaseField_monolithic
             m_dof_handler, boundary_id_right_surface_x,
             Functions::ZeroFunction<dim>(m_n_components), m_constraints,
             m_fe.component_mask(x_displacement));
-
+/*
         const int boundary_id_front_surface_z = 2;
         VectorTools::interpolate_boundary_values(
             m_dof_handler, boundary_id_front_surface_z,
@@ -3664,55 +3664,17 @@ namespace PhaseField_monolithic
             m_dof_handler, boundary_id_back_surface_z,
             Functions::ZeroFunction<dim>(m_n_components), m_constraints,
             m_fe.component_mask(z_displacement));
-
+*/
         const int boundary_id_top_surface_y = 4;
         VectorTools::interpolate_boundary_values(
             m_dof_handler, boundary_id_top_surface_y,
             Functions::ZeroFunction<dim>(m_n_components), m_constraints,
             m_fe.component_mask(y_displacement));
+        VectorTools::interpolate_boundary_values(
+            m_dof_handler, boundary_id_top_surface_y,
+            Functions::ZeroFunction<dim>(m_n_components), m_constraints,
+            m_fe.component_mask(z_displacement));
 
-        /*
-                    typename Triangulation<dim>::active_vertex_iterator
-           vertex_itr; vertex_itr = m_triangulation.begin_active_vertex();
-                    std::vector<types::global_dof_index>
-           node_xy(m_fe.dofs_per_vertex);
-
-                    for (; vertex_itr != m_triangulation.end_vertex();
-           ++vertex_itr)
-                      {
-                        if (   (std::fabs(vertex_itr->vertex()[0] - 25.0)
-           < 1.0e-9)
-                            && (std::fabs(vertex_itr->vertex()[1] -  0.0)
-           < 1.0e-9)
-                            && (std::fabs(vertex_itr->vertex()[2] -  0.5)
-           < 1.0e-9) )
-                          {
-                            node_xy = usr_utilities::get_vertex_dofs(vertex_itr,
-           m_dof_handler);
-                          }
-                      }
-                    m_constraints.add_line(node_xy[2]);
-                    m_constraints.set_inhomogeneity(node_xy[2], 0.0);
-
-                    for (; vertex_itr != m_triangulation.end_vertex();
-           ++vertex_itr)
-                      {
-                        if (   (std::fabs(vertex_itr->vertex()[0] - 25.0)
-           < 1.0e-9)
-                            && (std::fabs(vertex_itr->vertex()[1] - 10.0)
-           < 1.0e-9)
-                            && (std::fabs(vertex_itr->vertex()[2] -  0.5)
-           < 1.0e-9) )
-                          {
-                            node_xy = usr_utilities::get_vertex_dofs(vertex_itr,
-           m_dof_handler);
-                          }
-                      }
-                    m_constraints.add_line(node_xy[1]);
-                    m_constraints.set_inhomogeneity(node_xy[1], 0.0);
-                    m_constraints.add_line(node_xy[2]);
-                    m_constraints.set_inhomogeneity(node_xy[2], 0.0);
-        */
         // Remember, the essential B.C. is applied incrementally during each time
         // step. If a constant temperature is needed through time, the B.C should
         // be set as zero.
