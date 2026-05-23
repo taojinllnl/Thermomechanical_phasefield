@@ -3531,7 +3531,7 @@ namespace PhaseField_T_and_u_and_d
             m_dof_handler_u, boundary_id_right_surface_x,
             Functions::ZeroFunction<dim>(dim), m_constraints_u,
             m_fe_u.component_mask(x_displacement));
-
+/*
         const int boundary_id_front_surface_z = 2;
         VectorTools::interpolate_boundary_values(
             m_dof_handler_u, boundary_id_front_surface_z,
@@ -3542,12 +3542,16 @@ namespace PhaseField_T_and_u_and_d
             m_dof_handler_u, boundary_id_back_surface_z,
             Functions::ZeroFunction<dim>(dim), m_constraints_u,
             m_fe_u.component_mask(z_displacement));
-
+*/
         const int boundary_id_top_surface_y = 4;
         VectorTools::interpolate_boundary_values(
             m_dof_handler_u, boundary_id_top_surface_y,
             Functions::ZeroFunction<dim>(dim), m_constraints_u,
             m_fe_u.component_mask(y_displacement));
+        VectorTools::interpolate_boundary_values(
+            m_dof_handler_u, boundary_id_top_surface_y,
+            Functions::ZeroFunction<dim>(dim), m_constraints_u,
+            m_fe_u.component_mask(z_displacement));
       }
       else
         Assert(false, ExcMessage("The scenario has not been implemented!"));
