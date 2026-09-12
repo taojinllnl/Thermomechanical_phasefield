@@ -1547,6 +1547,8 @@ namespace PhaseField_T_and_u_and_d
       solution_temperature_diff = m_solution_t - solution_temperature_prev_iter;
       // Relaxation
       solution_temperature_diff *= m_parameters.m_over_relaxation_omega;
+
+      m_solution_t = solution_temperature_prev_iter;
       m_solution_t += solution_temperature_diff;
 
       update_qph_incremental(temp_solution_delta_displacement);
@@ -1560,6 +1562,8 @@ namespace PhaseField_T_and_u_and_d
     solution_phasefield_diff = m_solution_d - solution_phasefield_prev_iter;
     // Relaxation
     solution_phasefield_diff *= m_parameters.m_over_relaxation_omega;
+
+    m_solution_d = solution_phasefield_prev_iter;
     m_solution_d += solution_phasefield_diff;
 
     update_qph_incremental(temp_solution_delta_displacement);
