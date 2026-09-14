@@ -17,7 +17,7 @@ subsection Scenario
   set Output iteration history = yes
   
   # Choose phase-field model type (AT1 or AT2 or AT1-Cohesive or PFCZM)
-  set Phase-field model type = AT2
+  set Phase-field model type = PFCZM
 
   # Does the heat conduciton equaiton contains the mechanical coupling term? (yes or no)
   set Coupling on heat equation = yes
