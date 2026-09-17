@@ -1,6 +1,9 @@
 ## Thermomechanical phase-field solving schemes
 This repository provides three solving schemes for the thermomechanically coupled phase-field crack simulations, including the L-BFGS monolithic scheme, the fully staggered scheme, and the partially staggered scheme.
 
+For the parallelized version of the L-BFGS monolithic scheme, please see the following repository:
+https://github.com/taojinllnl/Thermomechanical_phasefield_LBFGS_mpi
+
 ### Purpose
 This repository provides the source code and the input files for the numerical examples used in the paper titled “Fully staggered, partially staggered, and monolithic schemes for thermomechanically coupled phase-field crack simulations: solver development and performance evaluation”. The tightly coupled governing equations are listed below
 <p align="center">
