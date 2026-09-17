@@ -1,15 +1,9 @@
 /* ---------------------------------------------------------------------
  *
- * Copyright (C) 2006 - 2020 by the deal.II authors
+ * Copyright (C) Tao Jin, PhD
+ *               University of Ottawa, Ottawa, Ontario, Canada
  *
- * This file is part of the deal.II library.
- *
- * The deal.II library is free software; you can use it, redistribute
- * it, and/or modify it under the terms of the GNU Lesser General
- * Public License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- * The full text of the license can be found in the file LICENSE.md at
- * the top level directory of deal.II.
+ * Email: tao.jin@uottawa.ca
  *
  * ---------------------------------------------------------------------
 
@@ -26,25 +20,25 @@
  * crack problem. The entire problem is decoupled into three subproblems, the
  * damage (phase-field) problem (d), the thermal problem (T), and the mechanical
  * problem (u):
- * 1. The phase-field formulation itself is based on "A phase field model for
- * rate-independent crack propagation - Robust algorithmic implementation based
- * on operator splits" by Christian Miehe , Martina Hofacker, Fabian
- * Welschinger.
+ * 1. Several phase-field models are provided, including AT-1, AT-2, AT-1 cohesive
+ *    and phase-field regularized cohesive-zone model (PFCZM).
  * 2. The thermal conductivity tensor is isotropic and degraded by the
- * phase-field.
+ *    phase-field.
  * 3. The thermal equation is transient and considers the temperature
  *    changing with time (T_dot). The backward Euler time integrator is used.
  * 4. The mechanical problem is quasi-static and does not consider the inertial
- * effort (no acceleration term).
+ *    effort (no acceleration term).
  * 5. This code implements a PURELY staggered approach. The displacement, the
- * temperature, and the phase-field are updated separately. The phase-field
+ *    temperature, and the phase-field are updated separately. The phase-field
  *    irreversibility is enforced through the history field Phi_0^+.
  * 6. Using TBB for stiffness assembly and Gauss point calculation.
  * 7. Using adaptive mesh refinement.
- * 8. The displacement is solved using Newton method, and the temperature
- * problem and the phase-field problem are both linear.
+ * 8. The displacement is solved using Newton method, the temperature
+ *    problem is linear, and the phase-field problem might be nonlinear when
+ *    cohesive phase-field model (rational degradation function) is used.
  *
  * Recent updates:
+ * 3. Add several cohesive type phase-field models (Sept. 16th, 2026)
  * 2. Add the option for Anderson acceleration and over-relaxation (Apr. 29th,
  * 2026)
  * 1. Add a flag to differentiate between the plane stress and plane strain
