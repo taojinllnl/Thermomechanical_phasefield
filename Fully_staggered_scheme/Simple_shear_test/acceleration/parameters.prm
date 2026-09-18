@@ -27,7 +27,7 @@ subsection Scenario
 
   # If it is 2D, is it plane-stress? (yes or no)
   set Plane stress = yes
-  
+
   # Over relaxation omega (1.0 means no relaxation)
   set Over relaxation omega = 1.8
  
