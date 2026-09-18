@@ -38,11 +38,12 @@
  *    cohesive phase-field model (rational degradation function) is used.
  *
  * Recent updates:
- * 3. Add several cohesive type phase-field models (Sept. 16th, 2026)
+ * 3. Add several cohesive type phase-field models and change the phase-field
+ *    problem from linear to nonlinear (Sept. 16th, 2026)
  * 2. Add the option for Anderson acceleration and over-relaxation (Apr. 29th,
- * 2026)
+ *    2026)
  * 1. Add a flag to differentiate between the plane stress and plane strain
- * cases in 2D (Mar. 12th, 2026)
+ *    cases in 2D (Mar. 12th, 2026)
  */
 
 #include <deal.II/grid/grid_generator.h>
@@ -638,6 +639,10 @@ namespace PhaseField_T_and_u_and_d
     {
       unsigned int m_max_staggered_iteration;
       unsigned int m_max_iterations_u;
+      unsigned int m_max_iterations_d;
+
+      double m_tol_u_newton;
+      double m_tol_d_newton;
 
       double m_tol_u_residual;
       double m_tol_t_residual;
@@ -659,9 +664,21 @@ namespace PhaseField_T_and_u_and_d
         prm.declare_entry("Max staggered iteration", "1000", Patterns::Integer(0),
                           "Maximum allowed number of staggered iterations");
 
-        prm.declare_entry(
-            "Max iterations U", "20", Patterns::Integer(0),
-            "Number of Newton iterations allowed for the U subproblem");
+        prm.declare_entry("Max iterations u", "20", Patterns::Integer(0),
+            "Number of Newton iterations allowed for the displacement subproblem");
+
+        prm.declare_entry("Max iterations d", "20", Patterns::Integer(0),
+            "Number of Newton iterations allowed for the phase-field subproblem");
+
+        prm.declare_entry("Newton tolerance for u subproblem",
+                          "1.0e-9",
+                          Patterns::Double(0.0),
+                          "Newton tolerance for displacement subproblem (nonlinear)");
+
+        prm.declare_entry("Newton tolerance for d subproblem",
+                          "1.0e-9",
+                          Patterns::Double(0.0),
+                          "Newton tolerance for phase-field subproblem (nonlinear)");
 
         prm.declare_entry("Tolerance u residual", "1.0e-9", Patterns::Double(0.0),
                           "Mechanical residual tolerance");
@@ -689,7 +706,11 @@ namespace PhaseField_T_and_u_and_d
       prm.enter_subsection("Nonlinear solver");
       {
         m_max_staggered_iteration = prm.get_integer("Max staggered iteration");
-        m_max_iterations_u = prm.get_integer("Max iterations U");
+        m_max_iterations_u = prm.get_integer("Max iterations u");
+        m_max_iterations_d = prm.get_integer("Max iterations d");
+
+        m_tol_u_newton = prm.get_double("Newton tolerance for u subproblem");
+        m_tol_d_newton = prm.get_double("Newton tolerance for d subproblem");
 
         m_tol_u_residual = prm.get_double("Tolerance u residual");
         m_tol_t_residual = prm.get_double("Tolerance T residual");
@@ -1069,7 +1090,7 @@ namespace PhaseField_T_and_u_and_d
         // the term due to viscosity regularization
         + (m_phase_field_value - phase_field_value_previous_step) *
           (m_phase_field_value - phase_field_value_previous_step) * 0.5 *
-              m_eta / delta_time;
+          m_eta / delta_time;
 
     // degraded thermal conductivity or not
     if (degrade_conductivity_or_not)
@@ -1441,8 +1462,9 @@ namespace PhaseField_T_and_u_and_d
                                  PerTaskData_RHS_T &data) const;
     void solve_linear_system_t();
 
-    void phasefield_step();
-    void make_constraints_d();
+    unsigned int phasefield_step(unsigned int itr_stagger);
+    void make_constraints_d(const unsigned int it_nr,
+                            const unsigned int itr_stagger);
     void assemble_system_d();
     void assemble_system_one_cell_d(
         const typename DoFHandler<dim>::active_cell_iterator &cell,
@@ -1451,7 +1473,9 @@ namespace PhaseField_T_and_u_and_d
     void assemble_rhs_one_cell_d(
         const typename DoFHandler<dim>::active_cell_iterator &cell,
         ScratchData_RHS_D &scratch, PerTaskData_RHS_D &data) const;
-    void solve_linear_system_d();
+    unsigned int solve_nonlinear_newton_d(Vector<double> &solution_delta_d,
+                                          unsigned int itr_stagger);
+    void solve_linear_system_d(Vector<double> &newton_update_d);
 
     void update_history_field_step();
 
@@ -1459,7 +1483,8 @@ namespace PhaseField_T_and_u_and_d
 
     void setup_qph();
 
-    void update_qph_incremental(const Vector<double> &solution_delta_u);
+    void update_qph_incremental(const Vector<double> &solution_delta_u,
+                                const Vector<double> &solution_delta_d);
 
     void
     update_qph_incremental_one_cell(const IteratorPair3 &synchronous_iterators,
@@ -1472,6 +1497,9 @@ namespace PhaseField_T_and_u_and_d
 
     Vector<double>
     get_total_solution_u(const Vector<double> &solution_delta_u) const;
+
+    Vector<double>
+    get_total_solution_d(const Vector<double> &solution_delta_d) const;
 
     // Should not make this function const
     void read_material_data(const std::string &data_file,
@@ -1615,7 +1643,10 @@ namespace PhaseField_T_and_u_and_d
 
       Vector<double> temp_solution_delta_displacement(m_dof_handler_u.n_dofs());
       temp_solution_delta_displacement = 0.0;
-      update_qph_incremental(temp_solution_delta_displacement);
+      Vector<double> temp_solution_delta_phasefield(m_dof_handler_d.n_dofs());
+      temp_solution_delta_phasefield = 0.0;
+      update_qph_incremental(temp_solution_delta_displacement,
+                             temp_solution_delta_phasefield);
 
       // calculate the displacement residual
       assemble_rhs_u();
@@ -1724,8 +1755,6 @@ namespace PhaseField_T_and_u_and_d
       const Vector<double> &solution_temperature_prev_iter,
       const unsigned int iter_stagger)
   {
-    (void)iter_stagger;
-
     solution_displacement_diff = m_solution_u - solution_displacement_prev_iter;
     // Relaxation
     solution_displacement_diff *= m_parameters.m_over_relaxation_omega;
@@ -1735,12 +1764,15 @@ namespace PhaseField_T_and_u_and_d
     m_solution_d = solution_phasefield_prev_iter;
     m_solution_t = solution_temperature_prev_iter;
 
-    update_qph_incremental(solution_displacement_diff);
-
-    m_solution_u += solution_displacement_diff;
-
     Vector<double> temp_solution_delta_displacement(m_dof_handler_u.n_dofs());
     temp_solution_delta_displacement = 0.0;
+    Vector<double> temp_solution_delta_phasefield(m_dof_handler_d.n_dofs());
+    temp_solution_delta_phasefield = 0.0;
+
+    update_qph_incremental(solution_displacement_diff,
+                           temp_solution_delta_phasefield);
+
+    m_solution_u += solution_displacement_diff;
 
     if (m_parameters.m_output_iteration_history)
       m_logfile << "                "
@@ -1766,22 +1798,24 @@ namespace PhaseField_T_and_u_and_d
       m_solution_t = solution_temperature_prev_iter;
       m_solution_t += solution_temperature_diff;
 
-      update_qph_incremental(temp_solution_delta_displacement);
+      update_qph_incremental(temp_solution_delta_displacement,
+                             temp_solution_delta_phasefield);
     }
 
     // lastly, resolve the phase-field subproblem (a linear problem)
     // if (m_parameters.m_output_iteration_history)
     //  m_logfile << "  sub-PF (l)" << std::flush;
-    phasefield_step();
-    ++linear_solve_needed;
+    linear_solve_needed += phasefield_step(iter_stagger);
     solution_phasefield_diff = m_solution_d - solution_phasefield_prev_iter;
     // Relaxation
     solution_phasefield_diff *= m_parameters.m_over_relaxation_omega;
 
     m_solution_d = solution_phasefield_prev_iter;
-    m_solution_d += solution_phasefield_diff;
 
-    update_qph_incremental(temp_solution_delta_displacement);
+    update_qph_incremental(temp_solution_delta_displacement,
+                           solution_phasefield_diff);
+
+    m_solution_d += solution_phasefield_diff;
 
     // calculate the displacement residual
     assemble_rhs_u();
@@ -2184,18 +2218,29 @@ namespace PhaseField_T_and_u_and_d
   }
 
   template <int dim>
+  Vector<double> SplitSolveTandUandD<dim>::get_total_solution_d(
+      const Vector<double> &solution_delta_d) const
+  {
+    Vector<double> solution_total_d(m_solution_d);
+    solution_total_d += solution_delta_d;
+    return solution_total_d;
+  }
+
+  template <int dim>
   void SplitSolveTandUandD<dim>::update_qph_incremental(
-      const Vector<double> &solution_delta_u)
+      const Vector<double> &solution_delta_u,
+      const Vector<double> &solution_delta_d)
   {
     m_timer.enter_subsection("Update QPH data");
 
     const Vector<double> solution_total_u(get_total_solution_u(solution_delta_u));
+    const Vector<double> solution_total_d(get_total_solution_d(solution_delta_d));
 
     const UpdateFlags uf_UQPH(update_values | update_gradients);
     PerTaskData_UQPH per_task_data_UQPH;
     ScratchData_UQPH scratch_data_UQPH(
         m_fe_u, m_fe_t, m_fe_d, m_qf_cell, uf_UQPH, solution_total_u,
-        m_solution_t, m_solution_d, m_solution_previous_d, m_time.get_delta_t(),
+        m_solution_t, solution_total_d, m_solution_previous_d, m_time.get_delta_t(),
         m_parameters.m_degrade_conductivity);
 
     auto worker = [this](const IteratorPair3 &synchronous_iterators,
@@ -3747,7 +3792,6 @@ namespace PhaseField_T_and_u_and_d
   void SplitSolveTandUandD<dim>::make_constraints_u(
       const unsigned int it_nr, const unsigned int itr_stagger)
   {
-
     // The staggered iteration starts from 1
     const bool apply_dirichlet_bc = ((it_nr == 0) && (itr_stagger == 1));
 
@@ -4406,6 +4450,7 @@ namespace PhaseField_T_and_u_and_d
     // surface heat flux (Neumann BC)
     const unsigned int face_flux_id = 100;
     const double h0 = 0.0;
+    const double ref_t = m_parameters.m_ref_temperature;
 
     for (const auto &face : std::get<0>(*synchronous_iterators)->face_iterators())
       if (face->at_boundary() && face->boundary_id() == face_flux_id)
@@ -4422,7 +4467,7 @@ namespace PhaseField_T_and_u_and_d
             const double Ni =
                 scratch.m_fe_face_values_t.shape_value(i, f_q_point);
             const double JxW = scratch.m_fe_face_values_t.JxW(f_q_point);
-            data.m_cell_rhs(i) += Ni * flux * JxW;
+            data.m_cell_rhs(i) += Ni * flux * delta_time / ref_t * JxW;
           }
         }
       }
@@ -4473,30 +4518,62 @@ namespace PhaseField_T_and_u_and_d
       const double current_positive_strain_energy =
           lqph[q_point]->get_current_positive_strain_energy();
 
+      const double p = lqph[q_point]->get_p();
+      const double a1 = lqph[q_point]->get_a1();
+      const double a2 = lqph[q_point]->get_a2();
+      const double a3 = lqph[q_point]->get_a3();
+
       double history_value = history_strain_energy;
       if (current_positive_strain_energy > history_strain_energy)
         history_value = current_positive_strain_energy;
+
+      const double phasefield_value = lqph[q_point]->get_phase_field_value();
+      const Tensor<1, dim> phasefield_grad =
+                           lqph[q_point]->get_phase_field_gradient();
 
       const std::vector<double> &N = scratch.m_Nx[q_point];
       const std::vector<Tensor<1, dim>> &grad_N = scratch.m_grad_Nx[q_point];
       const double old_phasefield = scratch.m_old_phasefield_cell[q_point];
       const double JxW = scratch.m_fe_values.JxW(q_point);
 
+      const double phasefield_coeff_const =
+          phasefield_coefficient_constant(m_parameters.m_phasefield_name);
+
+      const double phasefield_geo_derivative =
+          phasefield_geometry_function_derivative(
+                    phasefield_value, m_parameters.m_phasefield_name);
+
+      const double phasefield_geo_2nd_order_derivative =
+          phasefield_geometry_function_2nd_order_derivative(
+                    phasefield_value, m_parameters.m_phasefield_name);
+
       for (unsigned int i : scratch.m_fe_values.dof_indices())
       {
         for (unsigned int j : scratch.m_fe_values.dof_indices_ending_at(i))
         {
-          data.m_cell_matrix(i, j) +=
-              ((gc / length_scale + eta / delta_time + 2.0 * history_value) *
-                   N[i] * N[j] +
-               gc * length_scale * grad_N[i] * grad_N[j]) *
-              JxW;
+          data.m_cell_matrix(i, j) += (
+             (  gc / length_scale / phasefield_coeff_const *
+                phasefield_geo_2nd_order_derivative
+              + eta / delta_time
+              + degradation_function_2nd_order_derivative(phasefield_value, p,
+                  a1, a2, a3, m_parameters.m_phasefield_name) * history_value
+             ) * N[i] * N[j]
+           + 2.0 / phasefield_coeff_const * gc * length_scale
+             * grad_N[i] * grad_N[j]
+           ) * JxW;
         } // j
-        // Remember, this is a linear problem,rhs is only the right-hand side
-        // not the residual
-        data.m_cell_rhs(i) += (eta / delta_time * N[i] * old_phasefield +
-                               2.0 * N[i] * history_value) *
-                              JxW;
+        // Because of the cohesive phase-field model, phase-field subproblem
+        // is nonlinear, so we assemble the residual
+        data.m_cell_rhs(i) -= (
+               2.0 / phasefield_coeff_const * gc * length_scale
+             * grad_N[i] * phasefield_grad
+             + (  gc / length_scale / phasefield_coeff_const *
+                  phasefield_geo_derivative
+                + eta / delta_time * (phasefield_value - old_phasefield)
+                + degradation_function_derivative(phasefield_value, p,
+                    a1, a2, a3, m_parameters.m_phasefield_name) * history_value
+               ) *  N[i]
+           ) * JxW;
       } // i
     }   // q_point
 
@@ -4564,16 +4641,25 @@ namespace PhaseField_T_and_u_and_d
       const double old_phasefield = scratch.m_old_phasefield_cell[q_point];
       const double JxW = scratch.m_fe_values.JxW(q_point);
 
+      const double phasefield_coeff_const =
+          phasefield_coefficient_constant(m_parameters.m_phasefield_name);
+
+      const double phasefield_geo_derivative =
+          phasefield_geometry_function_derivative(phasefield_value,
+                                                  m_parameters.m_phasefield_name);
+
       for (unsigned int i : scratch.m_fe_values.dof_indices())
       {
-        data.m_cell_rhs(i) +=
-            (gc * length_scale * grad_N[i] * phasefield_grad +
-             (gc / length_scale * phasefield_value +
-              eta / delta_time * (phasefield_value - old_phasefield) +
-              degradation_function_derivative(phasefield_value, p, a1, a2, a3,
-                  m_parameters.m_phasefield_name) * history_value) *
-                 N[i]) *
-            JxW;
+        data.m_cell_rhs(i) += (
+            2.0 * gc * length_scale / phasefield_coeff_const
+          * grad_N[i] * phasefield_grad
+          + (   gc / length_scale / phasefield_coeff_const
+              * phasefield_geo_derivative
+              + eta / delta_time * (phasefield_value - old_phasefield)
+              + degradation_function_derivative(phasefield_value, p, a1, a2,
+                  a3, m_parameters.m_phasefield_name) * history_value
+            ) * N[i]
+         ) * JxW;
       } // i
     }   // q_point
   }
@@ -4726,6 +4812,7 @@ namespace PhaseField_T_and_u_and_d
     // surface heat flux (Neumann BC)
     const unsigned int face_flux_id = 100;
     const double h0 = 0.0;
+    const double ref_t = m_parameters.m_ref_temperature;
 
     for (const auto &face : std::get<0>(*synchronous_iterators)->face_iterators())
       if (face->at_boundary() && face->boundary_id() == face_flux_id)
@@ -4742,7 +4829,7 @@ namespace PhaseField_T_and_u_and_d
             const double Ni =
                 scratch.m_fe_face_values_t.shape_value(i, f_q_point);
             const double JxW = scratch.m_fe_face_values_t.JxW(f_q_point);
-            data.m_cell_rhs(i) -= Ni * flux * JxW;
+            data.m_cell_rhs(i) -= Ni * flux * delta_time / ref_t * JxW;
           }
         }
       }
@@ -4783,24 +4870,57 @@ namespace PhaseField_T_and_u_and_d
 
     Vector<double> solution_delta_u(m_dof_handler_u.n_dofs());
     solution_delta_u = 0.0;
-    update_qph_incremental(solution_delta_u);
+    Vector<double> solution_delta_d(m_dof_handler_d.n_dofs());
+    solution_delta_d = 0.0;
+    update_qph_incremental(solution_delta_u, solution_delta_d);
   }
 
-  template <int dim> void SplitSolveTandUandD<dim>::phasefield_step()
+  template <int dim>
+  unsigned int
+  SplitSolveTandUandD<dim>::phasefield_step(unsigned int itr_stagger)
   {
-    make_constraints_d();
-    assemble_system_d();
-    solve_linear_system_d();
-
-    Vector<double> solution_delta_u(m_dof_handler_u.n_dofs());
-    solution_delta_u = 0.0;
-    update_qph_incremental(solution_delta_u);
+    Vector<double> solution_delta_d(m_dof_handler_d.n_dofs());
+    solution_delta_d = 0.0;
+    unsigned int newton_itrs_required =
+        solve_nonlinear_newton_d(solution_delta_d, itr_stagger);
+    m_solution_d += solution_delta_d;
+    return newton_itrs_required;
   }
 
-  template <int dim> void SplitSolveTandUandD<dim>::make_constraints_d()
+  template <int dim>
+  void SplitSolveTandUandD<dim>::make_constraints_d(const unsigned int it_nr,
+                                                    const unsigned int itr_stagger)
   {
-    m_constraints_d.clear();
-    DoFTools::make_hanging_node_constraints(m_dof_handler_d, m_constraints_d);
+    // The staggered iteration starts from 1
+    const bool apply_dirichlet_bc = ((it_nr == 0) && (itr_stagger == 1));
+
+    if ((it_nr > 1) || (itr_stagger > 1))
+    {
+      // m_logfile << " --- " << std::flush;
+      return;
+    }
+
+    if (apply_dirichlet_bc)
+    {
+      m_constraints_d.clear();
+      DoFTools::make_hanging_node_constraints(m_dof_handler_d,
+                                              m_constraints_d);
+    }
+    else // inhomogeneous constraints
+    {
+      if (m_constraints_d.has_inhomogeneities())
+      {
+        AffineConstraints<double> homogeneous_constraints(
+            m_constraints_d);
+        for (unsigned int dof = 0; dof != m_dof_handler_d.n_dofs();
+             ++dof)
+          if (homogeneous_constraints.is_inhomogeneously_constrained(dof))
+            homogeneous_constraints.set_inhomogeneity(dof, 0.0);
+
+        m_constraints_d.clear();
+        m_constraints_d.copy_from(homogeneous_constraints);
+      }
+    }
     m_constraints_d.close();
   }
 
@@ -4944,7 +5064,7 @@ namespace PhaseField_T_and_u_and_d
   void SplitSolveTandUandD<dim>::solve_linear_system_u(
       Vector<double> &newton_update_u)
   {
-    m_timer.enter_subsection("Solve U linear system");
+    m_timer.enter_subsection("Solve u linear system");
 
     if (m_parameters.m_type_linear_solver == "Direct")
     {
@@ -4954,7 +5074,7 @@ namespace PhaseField_T_and_u_and_d
     }
     else if (m_parameters.m_type_linear_solver == "CG")
     {
-      SolverControl solver_control_u(1e6, 1e-12);
+      SolverControl solver_control_u(1e6, 1e-10);
       SolverCG<Vector<double>> cg_u(solver_control_u);
 
       PreconditionJacobi<SparseMatrix<double>> preconditioner_u;
@@ -4971,7 +5091,7 @@ namespace PhaseField_T_and_u_and_d
 
     m_constraints_u.distribute(newton_update_u);
 
-    m_timer.leave_subsection("Solve U linear system");
+    m_timer.leave_subsection("Solve u linear system");
   }
 
   template <int dim> void SplitSolveTandUandD<dim>::solve_linear_system_t()
@@ -4986,7 +5106,7 @@ namespace PhaseField_T_and_u_and_d
     }
     else if (m_parameters.m_type_linear_solver == "CG")
     {
-      SolverControl solver_control_t(1e6, 1e-15);
+      SolverControl solver_control_t(1e6, 1e-10);
       SolverCG<Vector<double>> cg_t(solver_control_t);
 
       PreconditionJacobi<SparseMatrix<double>> preconditioner_t;
@@ -5006,25 +5126,27 @@ namespace PhaseField_T_and_u_and_d
     m_timer.leave_subsection("Solve T linear system");
   }
 
-  template <int dim> void SplitSolveTandUandD<dim>::solve_linear_system_d()
+  template <int dim>
+  void SplitSolveTandUandD<dim>::solve_linear_system_d(
+      Vector<double> &newton_update_d)
   {
-    m_timer.enter_subsection("Solve phase-field linear system");
+    m_timer.enter_subsection("Solve d linear system");
 
     if (m_parameters.m_type_linear_solver == "Direct")
     {
       SparseDirectUMFPACK A_direct;
       A_direct.initialize(m_tangent_matrix_d);
-      A_direct.vmult(m_solution_d, m_system_rhs_d);
+      A_direct.vmult(newton_update_d, m_system_rhs_d);
     }
     else if (m_parameters.m_type_linear_solver == "CG")
     {
-      SolverControl solver_control_phasefield(1e6, 1e-15);
+      SolverControl solver_control_phasefield(1e6, 1e-10);
       SolverCG<Vector<double>> cg_phasefield(solver_control_phasefield);
 
       PreconditionJacobi<SparseMatrix<double>> preconditioner_phasefield;
       preconditioner_phasefield.initialize(m_tangent_matrix_d, 1.0);
 
-      cg_phasefield.solve(m_tangent_matrix_d, m_solution_d, m_system_rhs_d,
+      cg_phasefield.solve(m_tangent_matrix_d, newton_update_d, m_system_rhs_d,
                           preconditioner_phasefield);
     }
     else
@@ -5033,9 +5155,9 @@ namespace PhaseField_T_and_u_and_d
                                     "the phase-field subproblem!"));
     }
 
-    m_constraints_d.distribute(m_solution_d);
+    m_constraints_d.distribute(newton_update_d);
 
-    m_timer.leave_subsection("Solve phase-field linear system");
+    m_timer.leave_subsection("Solve d linear system");
   }
 
   template <int dim>
@@ -5048,6 +5170,10 @@ namespace PhaseField_T_and_u_and_d
     double error_update_u_l2 = 0.0;
     double error_residual_u_l2 = 0.0;
 
+    // It is IMPORTANT that newton_iteration at 0 (not 1), since
+    // it has an implication on the boundary conditions
+    // see make_constraints_u() and
+    // make_constraints_d() for details
     unsigned int newton_iteration = 0;
     for (; newton_iteration <= m_parameters.m_max_iterations_u; ++newton_iteration)
     {
@@ -5063,7 +5189,7 @@ namespace PhaseField_T_and_u_and_d
       error_residual_u_l2 = error_res_u.l2_norm();
 
       if (    ( newton_iteration > 0
-             && error_residual_u_l2 <= 1.0e-9
+             && error_residual_u_l2 <= m_parameters.m_tol_u_newton
            //&& error_update_u_l2 <= 1.0e-9
                )
            || (newton_iteration == m_parameters.m_max_iterations_u)
@@ -5087,12 +5213,80 @@ namespace PhaseField_T_and_u_and_d
 
       solution_delta_u += newton_update_u;
 
-      update_qph_incremental(solution_delta_u);
+      Vector<double> solution_delta_d(m_dof_handler_d.n_dofs());
+      solution_delta_d = 0.0;
+      update_qph_incremental(solution_delta_u, solution_delta_d);
     }
 
     //AssertThrow(
     //    newton_iteration < m_parameters.m_max_iterations_u,
     //    ExcMessage("No convergence in nonlinear solver for U-subproblem!"));
+
+    return newton_iteration;
+  }
+
+
+  template <int dim>
+  unsigned int SplitSolveTandUandD<dim>::solve_nonlinear_newton_d(
+      Vector<double> &solution_delta_d, unsigned int iter_stagger)
+  {
+    Vector<double> newton_update_d(m_dof_handler_d.n_dofs());
+    newton_update_d = 0.0;
+
+    double error_update_d_l2 = 0.0;
+    double error_residual_d_l2 = 0.0;
+
+    // It is IMPORTANT that newton_iteration at 0 (not 1), since
+    // it has an implication on the boundary conditions
+    // see make_constraints_u() and
+    // make_constraints_d() for details
+    unsigned int newton_iteration = 0;
+    for (; newton_iteration <= m_parameters.m_max_iterations_d; ++newton_iteration)
+    {
+      make_constraints_d(newton_iteration, iter_stagger);
+      assemble_system_d();
+
+      Vector<double> error_res_d(m_dof_handler_d.n_dofs());
+
+      for (unsigned int i = 0; i < m_dof_handler_d.n_dofs(); ++i)
+        if (!m_constraints_d.is_constrained(i))
+          error_res_d(i) = m_system_rhs_d(i);
+
+      error_residual_d_l2 = error_res_d.l2_norm();
+
+      if (    ( newton_iteration > 0
+             && error_residual_d_l2 <= m_parameters.m_tol_d_newton
+           //&& error_update_u_l2 <= 1.0e-9
+               )
+           || (newton_iteration == m_parameters.m_max_iterations_d)
+          )
+      {
+        if (m_parameters.m_output_iteration_history)
+          m_logfile << "   " << newton_iteration << "   " << std::setprecision(3)
+                    << std::setw(7) << std::scientific << error_residual_d_l2
+                    << "  " << error_update_d_l2 << std::flush;
+        break;
+      }
+
+      solve_linear_system_d(newton_update_d);
+
+      Vector<double> error_d(m_dof_handler_d.n_dofs());
+      for (unsigned int i = 0; i < m_dof_handler_d.n_dofs(); ++i)
+        if (!m_constraints_d.is_constrained(i))
+          error_d(i) = newton_update_d(i);
+
+      error_update_d_l2 = error_d.l2_norm();
+
+      solution_delta_d += newton_update_d;
+
+      Vector<double> solution_delta_u(m_dof_handler_u.n_dofs());
+      solution_delta_u = 0.0;
+      update_qph_incremental(solution_delta_u, solution_delta_d);
+    }
+
+    //AssertThrow(
+    //    newton_iteration < m_parameters.m_max_iterations_d,
+    //    ExcMessage("No convergence in nonlinear solver for d-subproblem!"));
 
     return newton_iteration;
   }
@@ -5607,6 +5801,13 @@ namespace PhaseField_T_and_u_and_d
               << m_parameters.m_type_nonlinear_solver << std::endl;
     m_logfile << "Linear solver type = " << m_parameters.m_type_linear_solver
               << std::endl;
+
+    m_logfile << "Newton-Raphson tolerance for displacement subproblem = "
+              << m_parameters.m_tol_u_newton << std::endl;
+
+    m_logfile << "Newton-Raphson tolerance for phase-field subproblem = "
+              << m_parameters.m_tol_d_newton << std::endl;
+
     m_logfile << "Mesh refinement strategy = "
               << m_parameters.m_refinement_strategy << std::endl;
 
@@ -5864,7 +6065,10 @@ namespace PhaseField_T_and_u_and_d
 
       Vector<double> solution_delta_u(m_dof_handler_u.n_dofs());
       solution_delta_u = 0.0;
-      update_qph_incremental(solution_delta_u);
+      Vector<double> solution_delta_d(m_dof_handler_d.n_dofs());
+      solution_delta_d = 0.0;
+      update_qph_incremental(solution_delta_u,
+                             solution_delta_d);
 
       m_logfile << "\t\tUpdate field variables" << std::endl;
 
@@ -6012,9 +6216,8 @@ namespace PhaseField_T_and_u_and_d
 
           // last, solve the phase-field subproblem (a linear problem)
           if (m_parameters.m_output_iteration_history)
-            m_logfile << "  sub-PF (l)" << std::flush;
-          phasefield_step();
-          ++linear_solve_needed;
+            m_logfile << "  sub-PF (nl)" << std::flush;
+          linear_solve_needed += phasefield_step(iter_stagger);
 
           // calculate the residual of the T-subproblem
           if (iter_stagger == 1)
