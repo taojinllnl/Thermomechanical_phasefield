@@ -1718,24 +1718,26 @@ namespace PhaseField_T_and_u_and_d
       if (total_residual_l2_current < before_acceleration_residual)
         m_logfile << "                "
                   << "Anderson acceleration   "
-                  << "                   "
-                  << "                   " << std::setprecision(3) << std::setw(7)
+                  << "                            "
+                  << "                            "
+                  << std::setprecision(1) << std::setw(7)
                   << std::scientific << temperature_residual_l2 << "  "
                   << displacement_residual_l2 << "  " << phasefield_residual_l2
                   << "  " << temperature_inc_l2 << "  " << displacement_inc_l2
                   << "  " << phasefield_inc_l2 << "  " << std::fixed
-                  << std::setprecision(6) << std::scientific
+                  << std::setprecision(5) << std::scientific
                   << energy_functional_current << std::endl;
       else
         m_logfile << "                "
                   << "Anderson acceleration (reject)  "
-                  << "               "
-                  << "               " << std::setprecision(3) << std::setw(7)
+                  << "                        "
+                  << "                        "
+                  << std::setprecision(1) << std::setw(7)
                   << std::scientific << temperature_residual_l2 << "  "
                   << displacement_residual_l2 << "  " << phasefield_residual_l2
                   << "  " << temperature_inc_l2 << "  " << displacement_inc_l2
                   << "  " << phasefield_inc_l2 << "  " << std::fixed
-                  << std::setprecision(6) << std::scientific
+                  << std::setprecision(5) << std::scientific
                   << energy_functional_current << std::endl;
     }
   }
@@ -1777,7 +1779,8 @@ namespace PhaseField_T_and_u_and_d
     if (m_parameters.m_output_iteration_history)
       m_logfile << "                "
                    "Over-relaxation"
-                   "         "
+                   "          "
+                << "                              "
                 << std::flush;
 
     // we only need to resolve temperature field if it depends on
@@ -1868,13 +1871,13 @@ namespace PhaseField_T_and_u_and_d
 
     if (m_parameters.m_output_iteration_history)
     {
-      m_logfile << "                   "
-                << "                   " << std::setprecision(3) << std::setw(7)
+      m_logfile << " "
+                << " " << std::setprecision(1) << std::setw(7)
                 << std::scientific << temperature_residual_l2 << "  "
                 << displacement_residual_l2 << "  " << phasefield_residual_l2
                 << "  " << temperature_inc_l2 << "  " << displacement_inc_l2
                 << "  " << phasefield_inc_l2 << "  " << std::fixed
-                << std::setprecision(6) << std::scientific
+                << std::setprecision(5) << std::scientific
                 << energy_functional_current << std::endl;
     }
   }
@@ -5196,7 +5199,7 @@ namespace PhaseField_T_and_u_and_d
           )
       {
         if (m_parameters.m_output_iteration_history)
-          m_logfile << "   " << newton_iteration << "   " << std::setprecision(3)
+          m_logfile << "   " << newton_iteration << "   " << std::setprecision(1)
                     << std::setw(7) << std::scientific << error_residual_u_l2
                     << "  " << error_update_u_l2 << std::flush;
         break;
@@ -5262,7 +5265,7 @@ namespace PhaseField_T_and_u_and_d
           )
       {
         if (m_parameters.m_output_iteration_history)
-          m_logfile << "   " << newton_iteration << "   " << std::setprecision(3)
+          m_logfile << "   " << newton_iteration << "   " << std::setprecision(1)
                     << std::setw(7) << std::scientific << error_residual_d_l2
                     << "  " << error_update_d_l2 << std::flush;
         break;
@@ -5680,24 +5683,25 @@ namespace PhaseField_T_and_u_and_d
 
   template <int dim> void SplitSolveTandUandD<dim>::print_conv_header()
   {
-    static const unsigned int l_width = 150;
+    static const unsigned int l_width = 153;
     m_logfile << '\t';
     for (unsigned int i = 0; i < l_width; ++i)
       m_logfile << '_';
     m_logfile << std::endl;
 
     m_logfile << "\tStag-itr  "
-              << "Subp-1    "
+              << "Subp-1  "
               << "Subp-2   "
-              << "No.Newton  Res.     Inc.   "
-              << "   Subp-3  "
+              << "No.Newton  Res.  Inc."
+              << "   Subp-3    "
+              << "No.Newton  Res.   Inc."
               << "     Res_t"
-              << "      Res_u"
-              << "     Res_d"
-              << "      Inc_t"
-              << "      Inc_u"
-              << "      Inc_d"
-              << "      Energy" << std::endl;
+              << "     Res_u"
+              << "    Res_d"
+              << "    Inc_t"
+              << "    Inc_u"
+              << "    Inc_d"
+              << "     Energy" << std::endl;
 
     m_logfile << '\t';
     for (unsigned int i = 0; i < l_width; ++i)
@@ -6211,12 +6215,12 @@ namespace PhaseField_T_and_u_and_d
 
           // second, solve the mechanical subproblem (a nonlinear problem)
           if (m_parameters.m_output_iteration_history)
-            m_logfile << "  sub-U (nl)" << std::flush;
+            m_logfile << " sub-U (nl)" << std::flush;
           linear_solve_needed += displacement_step(iter_stagger);
 
           // last, solve the phase-field subproblem (a linear problem)
           if (m_parameters.m_output_iteration_history)
-            m_logfile << "  sub-PF (nl)" << std::flush;
+            m_logfile << " sub-PF (nl)" << std::flush;
           linear_solve_needed += phasefield_step(iter_stagger);
 
           // calculate the residual of the T-subproblem
@@ -6292,7 +6296,7 @@ namespace PhaseField_T_and_u_and_d
             m_logfile << "  " << t_residual_l2 << "  " << u_residual_l2 << "  "
                       << d_residual_l2 << "  " << t_inc_l2 << "  " << u_inc_l2
                       << "  " << d_inc_l2 << "  " << std::fixed
-                      << std::setprecision(6) << std::scientific
+                      << std::setprecision(5) << std::scientific
                       << energy_functional_current << std::endl;
           }
 
@@ -6308,7 +6312,7 @@ namespace PhaseField_T_and_u_and_d
             if (m_parameters.m_output_iteration_history)
             {
               m_logfile << '\t';
-              for (unsigned int i = 0; i < 150; ++i)
+              for (unsigned int i = 0; i < 153; ++i)
                 m_logfile << '_';
               m_logfile << std::endl;
             }
