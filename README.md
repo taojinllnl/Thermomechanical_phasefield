@@ -4,6 +4,9 @@ This repository provides three solving schemes for the thermomechanically couple
 For the parallelized version of the L-BFGS monolithic scheme, please see the following repository:
 https://github.com/taojinllnl/Thermomechanical_phasefield_LBFGS_mpi
 
+### How to cite
+https://doi.org/10.1016/j.cma.2026.119419
+
 ### Purpose
 This repository provides the source code and the input files for the numerical examples used in the paper titled “Fully staggered, partially staggered, and monolithic schemes for thermomechanically coupled phase-field crack simulations: solver development and performance evaluation”. The tightly coupled governing equations are listed below
 <p align="center">
@@ -114,6 +117,3 @@ void assemble_system_rhs_BFGS_one_cell(
 <p align="center">
 <img src="./doc/tab1.png" width="800">
 </p>
-
-### How to cite this work
-TBD...
