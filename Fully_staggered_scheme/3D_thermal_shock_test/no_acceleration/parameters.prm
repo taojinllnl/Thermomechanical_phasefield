@@ -17,6 +17,9 @@ subsection Scenario
   # Shall we write the iteration history to the log file? (yes or no)
   set Output iteration history = yes
   
+  # Choose phase-field model type (AT1 or AT2 or AT1-Cohesive or PFCZM)
+  set Phase-field model type = AT2
+
   # Does the heat conduciton equaiton contains the mechanical coupling term? (yes or no)
   set Coupling on heat equation = no
 
@@ -108,7 +111,16 @@ subsection Nonlinear solver
   set Max staggered iteration = 20000
 
   # Number of Newton iterations allowed for the mechanical (u) subproblem
-  set Max iterations U = 100
+  set Max iterations u = 20
+
+  # Number of Newton iterations allowed for the phase-field (d) subproblem
+  set Max iterations d = 20
+
+  # Newton-Raphson tolerance for nonlinear displacement subproblem
+  set Newton tolerance for u subproblem     = 1.0e-9
+
+  # Newton-Raphson tolerance for nonlinear phase-field subproblem
+  set Newton tolerance for d subproblem     = 1.0e-9
 
   # Mechanical (u) subproblem residual tolerance
   set Tolerance u residual                  = 1.0e-4

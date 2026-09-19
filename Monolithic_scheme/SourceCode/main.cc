@@ -80,11 +80,6 @@
 #include <deal.II/lac/sparse_direct.h>
 #include <deal.II/lac/sparse_ilu.h>
 
-#include <deal.II/lac/petsc_precondition.h>
-#include <deal.II/lac/petsc_solver.h>
-#include <deal.II/lac/petsc_sparse_matrix.h>
-#include <deal.II/lac/petsc_vector.h>
-
 #include <deal.II/numerics/error_estimator.h>
 
 #include <deal.II/physics/elasticity/standard_tensors.h>
@@ -1479,63 +1474,7 @@ namespace PhaseField_monolithic
     bool
     local_refine_and_solution_transfer(BlockVector<double> &solution_delta,
                                        BlockVector<double> &LBFGS_update_refine);
-
-    // The following three functions are created to convert between Petsc objects
-    // (vector and matrix) and dealii objects (vector and sparse matrix)
-    void copy_sparse_matrix_to_petsc(const SparsityPattern &src_sparsity_pattern,
-                                     const SparseMatrix<double> &src,
-                                     PETScWrappers::SparseMatrix &dst);
-
-    void copy_dealii_vector_to_petsc_using_set(const Vector<double> &src,
-                                               PETScWrappers::MPI::Vector &dst);
-
-    void copy_petsc_vector_to_dealii(const PETScWrappers::MPI::Vector &src,
-                                     Vector<double> &dst);
-
   }; // class PhaseFieldMonolithicSolve
-
-  template <int dim>
-  void PhaseFieldMonolithicSolve<dim>::copy_sparse_matrix_to_petsc(
-      const SparsityPattern &src_sparsity_pattern,
-      const SparseMatrix<double> &src, PETScWrappers::SparseMatrix &dst)
-  {
-    dst.reinit(src_sparsity_pattern);
-    for (unsigned int i = 0; i < src.m(); ++i)
-      for (auto entry = src.begin(i); entry != src.end(i); ++entry)
-        dst.set(i, entry->column(), entry->value());
-
-    dst.compress(VectorOperation::insert);
-  }
-
-  template <int dim>
-  void PhaseFieldMonolithicSolve<dim>::copy_dealii_vector_to_petsc_using_set(
-      const Vector<double> &src, PETScWrappers::MPI::Vector &dst)
-  {
-    std::vector<types::global_dof_index> indices(src.size());
-    std::iota(indices.begin(), indices.end(), 0);
-
-    std::vector<PetscScalar> values(src.size());
-    src.extract_subvector_to(indices, values);
-
-    dst.set(indices, values);
-    dst.compress(VectorOperation::insert);
-  }
-
-  template <int dim>
-  void PhaseFieldMonolithicSolve<dim>::copy_petsc_vector_to_dealii(
-      const PETScWrappers::MPI::Vector &src, Vector<double> &dst)
-  {
-    dst.reinit(src.size());
-
-    std::vector<types::global_dof_index> indices(src.size());
-    std::iota(indices.begin(), indices.end(), 0);
-
-    std::vector<PetscScalar> values(src.size());
-    src.extract_subvector_to(indices, values);
-
-    for (unsigned int i = 0; i < dst.size(); ++i)
-      dst[i] = static_cast<double>(values[i]);
-  }
 
   template <int dim>
   void PhaseFieldMonolithicSolve<dim>::get_error_residual(Errors &error_residual)
@@ -4452,6 +4391,7 @@ namespace PhaseField_monolithic
     // surface heat flux (Neumann BC)
     const unsigned int face_flux_id = 100;
     const double h0 = 0.0;
+    const double ref_t = m_parameters.m_ref_temperature;
 
     for (const auto &face : cell->face_iterators())
       if (face->at_boundary() && face->boundary_id() == face_flux_id)
@@ -4472,7 +4412,7 @@ namespace PhaseField_monolithic
               const double Ni =
                   scratch.m_fe_face_values.shape_value(i, f_q_point);
               const double JxW = scratch.m_fe_face_values.JxW(f_q_point);
-              data.m_cell_rhs(i) -= Ni * flux * JxW;
+              data.m_cell_rhs(i) -= Ni * flux * delta_time / ref_t * JxW;
             }
           }
         }
@@ -5165,88 +5105,8 @@ namespace PhaseField_monolithic
       }
       else if (m_parameters.m_type_preconditioner == "AMG")
       {
-        m_timer.enter_subsection("PETSc overhead");
-
-        // solve uu overhead
-        const types::global_dof_index n_dofs_uu = m_dofs_per_block[m_u_dof];
-        PETScWrappers::SparseMatrix petsc_matrix_uu;
-        PETScWrappers::MPI::Vector petsc_solution_uu;
-        PETScWrappers::MPI::Vector petsc_rhs_uu;
-        copy_sparse_matrix_to_petsc(m_sparsity_pattern.block(m_u_dof, m_u_dof),
-                                    m_tangent_matrix.block(m_u_dof, m_u_dof),
-                                    petsc_matrix_uu);
-        petsc_solution_uu.reinit(MPI_COMM_SELF, n_dofs_uu, n_dofs_uu);
-        petsc_rhs_uu.reinit(MPI_COMM_SELF, n_dofs_uu, n_dofs_uu);
-        petsc_rhs_uu = 0.0;
-        petsc_solution_uu = 0.0;
-        copy_dealii_vector_to_petsc_using_set(LBFGS_q_vector.block(m_u_dof),
-                                              petsc_rhs_uu);
-
-        // solve dd overhead
-        const types::global_dof_index n_dofs_dd = m_dofs_per_block[m_d_dof];
-        PETScWrappers::SparseMatrix petsc_matrix_dd;
-        PETScWrappers::MPI::Vector petsc_solution_dd;
-        PETScWrappers::MPI::Vector petsc_rhs_dd;
-        copy_sparse_matrix_to_petsc(m_sparsity_pattern.block(m_d_dof, m_d_dof),
-                                    m_tangent_matrix.block(m_d_dof, m_d_dof),
-                                    petsc_matrix_dd);
-        petsc_solution_dd.reinit(MPI_COMM_SELF, n_dofs_dd, n_dofs_dd);
-        petsc_rhs_dd.reinit(MPI_COMM_SELF, n_dofs_dd, n_dofs_dd);
-        petsc_rhs_dd = 0.0;
-        petsc_solution_dd = 0.0;
-        copy_dealii_vector_to_petsc_using_set(LBFGS_q_vector.block(m_d_dof),
-                                              petsc_rhs_dd);
-
-        // solve tt overhead
-        const types::global_dof_index n_dofs_tt = m_dofs_per_block[m_t_dof];
-        PETScWrappers::SparseMatrix petsc_matrix_tt;
-        PETScWrappers::MPI::Vector petsc_solution_tt;
-        PETScWrappers::MPI::Vector petsc_rhs_tt;
-        copy_sparse_matrix_to_petsc(m_sparsity_pattern.block(m_t_dof, m_t_dof),
-                                    m_tangent_matrix.block(m_t_dof, m_t_dof),
-                                    petsc_matrix_tt);
-        petsc_solution_tt.reinit(MPI_COMM_SELF, n_dofs_tt, n_dofs_tt);
-        petsc_rhs_tt.reinit(MPI_COMM_SELF, n_dofs_tt, n_dofs_tt);
-        petsc_rhs_tt = 0.0;
-        petsc_solution_tt = 0.0;
-        copy_dealii_vector_to_petsc_using_set(LBFGS_q_vector.block(m_t_dof),
-                                              petsc_rhs_tt);
-
-        m_timer.leave_subsection();
-
-        PETScWrappers::PreconditionBoomerAMG::AdditionalData amg_data;
-        amg_data.symmetric_operator = true;
-        amg_data.strong_threshold = 0.25;
-        PETScWrappers::PreconditionBoomerAMG petsc_amg;
-
-        // solve uu
-        petsc_amg.initialize(petsc_matrix_uu, amg_data);
-        PETScWrappers::SolverCG petsc_solver_uu(solver_control_uu);
-        petsc_solver_uu.solve(petsc_matrix_uu, petsc_solution_uu, petsc_rhs_uu,
-                              petsc_amg);
-
-        // solve dd
-        petsc_amg.initialize(petsc_matrix_dd, amg_data);
-        PETScWrappers::SolverCG petsc_solver_dd(solver_control_dd);
-        petsc_solver_dd.solve(petsc_matrix_dd, petsc_solution_dd, petsc_rhs_dd,
-                              petsc_amg);
-
-        // solve tt
-        petsc_amg.initialize(petsc_matrix_tt, amg_data);
-        PETScWrappers::SolverCG petsc_solver_tt(solver_control_tt);
-        petsc_solver_tt.solve(petsc_matrix_tt, petsc_solution_tt, petsc_rhs_tt,
-                              petsc_amg);
-
-        m_timer.enter_subsection("PETSc overhead");
-
-        copy_petsc_vector_to_dealii(petsc_solution_uu,
-                                    LBFGS_r_vector.block(m_u_dof));
-        copy_petsc_vector_to_dealii(petsc_solution_dd,
-                                    LBFGS_r_vector.block(m_d_dof));
-        copy_petsc_vector_to_dealii(petsc_solution_tt,
-                                    LBFGS_r_vector.block(m_t_dof));
-
-        m_timer.leave_subsection();
+        AssertThrow(false, ExcMessage("To use AMG preconditioner, please "
+            "use the parallelized version of this code!"));
       }
     }
     else
@@ -6547,11 +6407,6 @@ int main(int argc, char *argv[])
 {
 
   using namespace dealii;
-
-  // This is needed in order to use PETSc AMG preconditioner provided
-  // via the PETScWrappers interface (note that this code is still only
-  // for serial run.)
-  Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 1);
 
   if (argc != 2)
     AssertThrow(
