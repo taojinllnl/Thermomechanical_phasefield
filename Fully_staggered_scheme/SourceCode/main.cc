@@ -1718,8 +1718,8 @@ namespace PhaseField_T_and_u_and_d
       if (total_residual_l2_current < before_acceleration_residual)
         m_logfile << "                "
                   << "Anderson acceleration   "
-                  << "                            "
-                  << "                            "
+                  << "                          "
+                  << "                          "
                   << std::setprecision(1) << std::setw(7)
                   << std::scientific << temperature_residual_l2 << "  "
                   << displacement_residual_l2 << "  " << phasefield_residual_l2
@@ -1730,8 +1730,8 @@ namespace PhaseField_T_and_u_and_d
       else
         m_logfile << "                "
                   << "Anderson acceleration (reject)  "
-                  << "                        "
-                  << "                        "
+                  << "                      "
+                  << "                      "
                   << std::setprecision(1) << std::setw(7)
                   << std::scientific << temperature_residual_l2 << "  "
                   << displacement_residual_l2 << "  " << phasefield_residual_l2
@@ -1779,8 +1779,8 @@ namespace PhaseField_T_and_u_and_d
     if (m_parameters.m_output_iteration_history)
       m_logfile << "                "
                    "Over-relaxation"
-                   "          "
-                << "                              "
+                   "            "
+                << "                          "
                 << std::flush;
 
     // we only need to resolve temperature field if it depends on
@@ -5077,7 +5077,7 @@ namespace PhaseField_T_and_u_and_d
     }
     else if (m_parameters.m_type_linear_solver == "CG")
     {
-      SolverControl solver_control_u(1e6, 1e-10);
+      SolverControl solver_control_u(1e6, 1e-12);
       SolverCG<Vector<double>> cg_u(solver_control_u);
 
       PreconditionJacobi<SparseMatrix<double>> preconditioner_u;
@@ -5109,7 +5109,7 @@ namespace PhaseField_T_and_u_and_d
     }
     else if (m_parameters.m_type_linear_solver == "CG")
     {
-      SolverControl solver_control_t(1e6, 1e-10);
+      SolverControl solver_control_t(1e6, 1e-15);
       SolverCG<Vector<double>> cg_t(solver_control_t);
 
       PreconditionJacobi<SparseMatrix<double>> preconditioner_t;
@@ -5143,7 +5143,7 @@ namespace PhaseField_T_and_u_and_d
     }
     else if (m_parameters.m_type_linear_solver == "CG")
     {
-      SolverControl solver_control_phasefield(1e6, 1e-10);
+      SolverControl solver_control_phasefield(1e6, 1e-15);
       SolverCG<Vector<double>> cg_phasefield(solver_control_phasefield);
 
       PreconditionJacobi<SparseMatrix<double>> preconditioner_phasefield;
@@ -5199,7 +5199,8 @@ namespace PhaseField_T_and_u_and_d
           )
       {
         if (m_parameters.m_output_iteration_history)
-          m_logfile << "   " << newton_iteration << "   " << std::setprecision(1)
+          m_logfile << " "  << std::setw(2) << newton_iteration
+                    << "  " << std::setprecision(1)
                     << std::setw(7) << std::scientific << error_residual_u_l2
                     << "  " << error_update_u_l2 << std::flush;
         break;
@@ -5265,7 +5266,8 @@ namespace PhaseField_T_and_u_and_d
           )
       {
         if (m_parameters.m_output_iteration_history)
-          m_logfile << "   " << newton_iteration << "   " << std::setprecision(1)
+          m_logfile << " " << std::setw(2) << newton_iteration
+                    << "  " << std::setprecision(1)
                     << std::setw(7) << std::scientific << error_residual_d_l2
                     << "  " << error_update_d_l2 << std::flush;
         break;
@@ -5695,9 +5697,9 @@ namespace PhaseField_T_and_u_and_d
               << "No.Newton  Res.  Inc."
               << "   Subp-3    "
               << "No.Newton  Res.   Inc."
-              << "     Res_t"
-              << "     Res_u"
-              << "    Res_d"
+              << "   Res_t"
+              << "   Res_u"
+              << "   Res_d"
               << "    Inc_t"
               << "    Inc_u"
               << "    Inc_d"
