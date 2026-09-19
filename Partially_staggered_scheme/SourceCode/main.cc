@@ -19,7 +19,7 @@
  *         Oct. 2025
  *
  * How to cite:
- *         TBD
+ *         https://doi.org/10.1016/j.cma.2026.119419
  */
 
 /* A hybrid staggered scheme to solve the phase-field thermomechanically coupled
