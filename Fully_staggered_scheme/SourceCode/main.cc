@@ -1165,7 +1165,6 @@ namespace PhaseField_T_and_u_and_d
                     ExcMessage(
                     "The phase-field geometric function has not been implemented!"));
 
-      m_history_max_positive_strain_energy = 0.0;
       m_length_scale = length_scale;
       m_viscosity = viscosity;
       m_p = p;
