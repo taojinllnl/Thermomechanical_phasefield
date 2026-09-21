@@ -934,6 +934,22 @@ namespace PhaseField_T_and_u_and_d
 
     double get_thermal_conductivity_degraded() const { return m_kappa_d; }
 
+    double get_length_scale() const { return m_length_scale; }
+
+    double get_heat_capacity() const { return m_heat_capacity; }
+
+    double get_tensile_strength() const { return m_tensile_strength; }
+
+    double get_viscosity() const { return m_eta; }
+
+    double get_p() const { return m_p; }
+
+    double get_a1() const { return m_a1; }
+
+    double get_a2() const { return m_a2; }
+
+    double get_a3() const { return m_a3; }
+
     void update_material_data(const SymmetricTensor<2, dim> &strain,
                               const double phase_field_value,
                               const Tensor<1, dim> &grad_phasefield,
@@ -956,9 +972,9 @@ namespace PhaseField_T_and_u_and_d
     const double m_max_t;
     const double m_b_1;
     const double m_b_2;
-    const double m_tensile_strength;
+    double m_tensile_strength;
     const double m_p;
-    const double m_a1;
+    double m_a1;
     const double m_a2;
     const double m_a3;
     const std::string m_phasefield_name;
@@ -1010,6 +1026,25 @@ namespace PhaseField_T_and_u_and_d
     double term_1 = (temperature - m_ref_t) / m_max_t;
     double coeff = 1.0 - m_b_1 * term_1 + m_b_2 * term_1 * term_1;
     m_gc_t = coeff * m_gc_0;
+
+    // For the equivalent of 1D strain energy at fracture ft^2/(2E)
+    // the Young's modulus E is for 3D case
+    const double E0 = m_lame_mu * (3 * m_lame_lambda + 2 * m_lame_mu)
+        / (m_lame_lambda + m_lame_mu);
+
+    const double phase_field_coeff_constant =
+        phasefield_coefficient_constant(m_phasefield_name);
+
+    // Since a1 is temperature dependent, we need to re-evaluate this
+    // coefficient for rational degradation function
+    if (m_phasefield_name == "PFCZM")
+      m_a1 = 4.0 / (phase_field_coeff_constant * m_length_scale)
+           * m_gc_t * E0 / (m_tensile_strength * m_tensile_strength);
+    else if (m_phasefield_name == "AT1-Cohesive")
+      m_a1 = 2.0 / (phase_field_coeff_constant * m_length_scale)
+           * m_gc_t * E0 / (m_tensile_strength * m_tensile_strength);
+    else
+      m_a1 = 0.0;
 
     Vector<double> eigenvalues(dim);
     std::vector<Tensor<1, dim>> eigenvectors(dim);
@@ -1078,8 +1113,6 @@ namespace PhaseField_T_and_u_and_d
 
     const double phase_field_geo_value =
         phasefield_geometry_function(m_phase_field_value, m_phasefield_name);
-    const double phase_field_coeff_constant =
-        phasefield_coefficient_constant(m_phasefield_name);
 
     // The critical energy release rate m_gc should be temperature-dependent.
     m_crack_energy_dissipation =
@@ -1109,10 +1142,9 @@ namespace PhaseField_T_and_u_and_d
   {
   public:
     PointHistory()
-        : m_length_scale(0.0), m_viscosity(0.0),
-          m_p(0.0), m_a1(0.0), m_a2(0.0), m_a3(0.0),
-          m_history_max_positive_strain_energy(0.0), m_heat_capacity(0.0),
-          m_coupling_on_heat_eq(false)
+        : m_history_max_positive_strain_energy(0.0),
+          m_coupling_on_heat_eq(false),
+          m_degrade_conductivity(false)
     {
     }
 
@@ -1126,7 +1158,8 @@ namespace PhaseField_T_and_u_and_d
         const double max_temperature, const double b_1, const double b_2,
         const double tensile_strength, const double p, const double a2,
         const double a3, const std::string &phasefield_name,
-        const bool coupling_on_heat_eq, const bool plane_stress_flag)
+        const bool coupling_on_heat_eq, const bool plane_stress_flag,
+        const bool degrade_conductivity)
     {
       // For the equivalent of 1D strain energy at fracture ft^2/(2E)
       // the Young's modulus E is for 3D case
@@ -1136,15 +1169,9 @@ namespace PhaseField_T_and_u_and_d
       const double phasefield_geo_constant =
           phasefield_coefficient_constant(phasefield_name);
 
+      // Since the critical energy release rate is temperature dependent,
+      // the value of a1 needs to be re-evaluated in update_material_date()
       double a1 = 0.0;
-      if (phasefield_name == "PFCZM")
-        a1 = 4.0 / (phasefield_geo_constant * length_scale) * gc_0 * E0 /
-             (tensile_strength * tensile_strength);
-      else if (phasefield_name == "AT1-Cohesive")
-        a1 = 2.0 / (phasefield_geo_constant * length_scale) * gc_0 * E0 /
-             (tensile_strength * tensile_strength);
-      else
-        a1 = 0.0;
 
       m_material = std::make_shared<LinearIsotropicElasticityAdditiveSplit<dim>>(
           lame_lambda, lame_mu, residual_k, length_scale, viscosity, gc_0,
@@ -1165,17 +1192,12 @@ namespace PhaseField_T_and_u_and_d
                     ExcMessage(
                     "The phase-field geometric function has not been implemented!"));
 
-      m_length_scale = length_scale;
-      m_viscosity = viscosity;
-      m_p = p;
-      m_a1 = a1;
-      m_a2 = a2;
-      m_a3 = a3;
-      m_heat_capacity = heat_capacity;
       m_coupling_on_heat_eq = coupling_on_heat_eq;
+      m_degrade_conductivity = degrade_conductivity;
 
       update_field_values(SymmetricTensor<2, dim>(), 0.0, Tensor<1, dim>(), 0.0,
-                          1.0, reference_temperature, Tensor<1, dim>(), true);
+                          1.0, reference_temperature, Tensor<1, dim>(),
+                          degrade_conductivity);
     }
 
     void update_field_values(const SymmetricTensor<2, dim> &strain,
@@ -1287,21 +1309,37 @@ namespace PhaseField_T_and_u_and_d
       return m_history_max_positive_strain_energy;
     }
 
-    double get_length_scale() const { return m_length_scale; }
+    double get_length_scale() const
+    {
+      return m_material->get_length_scale();
+    }
 
-    double get_viscosity() const { return m_viscosity; }
+    double get_viscosity() const { return m_material->get_viscosity(); }
 
-    double get_p() const { return m_p; }
+    double get_p() const { return m_material->get_p(); }
 
-    double get_a1() const { return m_a1; }
+    double get_a1() const { return m_material->get_a1(); }
 
-    double get_a2() const { return m_a2; }
+    double get_a2() const { return m_material->get_a2(); }
 
-    double get_a3() const { return m_a3; }
+    double get_a3() const { return m_material->get_a3(); }
 
-    double get_heat_capacity() const { return m_heat_capacity; }
+    double get_heat_capacity() const
+    {
+      return m_material->get_heat_capacity();
+    }
+
+    double get_tensile_strength() const
+    {
+      return m_material->get_tensile_strength();
+    }
 
     bool get_heat_coupling_flag() const { return m_coupling_on_heat_eq; }
+
+    bool get_degrade_conductivity_flag() const
+    {
+      return m_degrade_conductivity;
+    }
 
     double get_thermal_expansion_coeff() const
     {
@@ -1312,17 +1350,16 @@ namespace PhaseField_T_and_u_and_d
 
     double get_lame_mu() const { return m_material->get_lame_mu(); }
 
+    double get_tensile_strenght() const
+    {
+      return m_material->get_tensile_strength();
+    }
+
   private:
     std::shared_ptr<LinearIsotropicElasticityAdditiveSplit<dim>> m_material;
-    double m_length_scale;
-    double m_viscosity;
-    double m_p;
-    double m_a1;
-    double m_a2;
-    double m_a3;
     double m_history_max_positive_strain_energy;
-    double m_heat_capacity;
     bool m_coupling_on_heat_eq;
+    bool m_degrade_conductivity;
   };
 
   template <int dim> class SplitSolveTandUandD
@@ -2206,7 +2243,8 @@ namespace PhaseField_T_and_u_and_d
             heat_capacity, thermal_conductivity_0, thermal_expansion_coeff,
             reference_temperature, max_temperature, b_1, b_2,
             tensile_strength, p, a2, a3, m_parameters.m_phasefield_name,
-            m_parameters.m_coupling_on_heat_eq, m_parameters.m_plane_stress);
+            m_parameters.m_coupling_on_heat_eq, m_parameters.m_plane_stress,
+            m_parameters.m_degrade_conductivity);
     }
   }
 
