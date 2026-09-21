@@ -873,7 +873,8 @@ namespace PhaseField_T_and_u_and_d
           m_strain_energy_positive(0.0), m_strain_energy_negative(0.0),
           m_strain_energy_total(0.0), m_crack_energy_dissipation(0.0),
           m_gc_t(0.0), m_kappa_d(0.0), m_temperature(0.0),
-          m_grad_temperature(Tensor<1, dim>()), m_heat_flux(Tensor<1, dim>())
+          m_grad_temperature(Tensor<1, dim>()), m_heat_flux(Tensor<1, dim>()),
+          m_history_energy_threshold(0.0)
     {
       Assert((lame_lambda / (2 * (lame_lambda + lame_mu)) <= 0.5) &
                  (lame_lambda / (2 * (lame_lambda + lame_mu)) >= -1.0),
@@ -950,6 +951,11 @@ namespace PhaseField_T_and_u_and_d
 
     double get_a3() const { return m_a3; }
 
+    double get_history_energy_threshold() const
+    {
+      return m_history_energy_threshold;
+    }
+
     void update_material_data(const SymmetricTensor<2, dim> &strain,
                               const double phase_field_value,
                               const Tensor<1, dim> &grad_phasefield,
@@ -996,6 +1002,8 @@ namespace PhaseField_T_and_u_and_d
     double m_temperature;
     Tensor<1, dim> m_grad_temperature;
     Tensor<1, dim> m_heat_flux;
+    // For non-AT phase-field models
+    double m_history_energy_threshold;
   };
 
   template <int dim>
@@ -1045,6 +1053,21 @@ namespace PhaseField_T_and_u_and_d
            * m_gc_t * E0 / (m_tensile_strength * m_tensile_strength);
     else
       m_a1 = 0.0;
+
+    // Since strain energy threshold depends on the temperature, we need
+    // to re-evaluate this coefficient for non-AT2 phase-field models
+    if (m_phasefield_name == "AT2")
+      m_history_energy_threshold = 0.0;
+    else if (m_phasefield_name == "AT1")
+      m_history_energy_threshold =
+          m_gc_t / (2 * m_length_scale * phase_field_coeff_constant);
+    else if (m_phasefield_name == "PFCZM" || m_phasefield_name == "AT1-Cohesive")
+      m_history_energy_threshold =
+          m_tensile_strength * m_tensile_strength / (2 * E0);
+    else
+      AssertThrow(false,
+                  ExcMessage(
+                  "The phase-field geometric function has not been implemented!"));
 
     Vector<double> eigenvalues(dim);
     std::vector<Tensor<1, dim>> eigenvectors(dim);
@@ -1161,14 +1184,6 @@ namespace PhaseField_T_and_u_and_d
         const bool coupling_on_heat_eq, const bool plane_stress_flag,
         const bool degrade_conductivity)
     {
-      // For the equivalent of 1D strain energy at fracture ft^2/(2E)
-      // the Young's modulus E is for 3D case
-      const double E0 =
-          lame_mu * (3 * lame_lambda + 2 * lame_mu) / (lame_lambda + lame_mu);
-
-      const double phasefield_geo_constant =
-          phasefield_coefficient_constant(phasefield_name);
-
       // Since the critical energy release rate is temperature dependent,
       // the value of a1 needs to be re-evaluated in update_material_date()
       double a1 = 0.0;
@@ -1179,18 +1194,12 @@ namespace PhaseField_T_and_u_and_d
           reference_temperature, max_temperature, b_1, b_2,
           tensile_strength, p, a1, a2, a3, phasefield_name, plane_stress_flag);
 
-      if (phasefield_name == "AT2")
-        m_history_max_positive_strain_energy = 0.0;
-      else if (phasefield_name == "AT1")
-        m_history_max_positive_strain_energy =
-            gc_0 / (2 * length_scale * phasefield_geo_constant);
-      else if (phasefield_name == "PFCZM" || phasefield_name == "AT1-Cohesive")
-        m_history_max_positive_strain_energy =
-            tensile_strength * tensile_strength / (2 * E0);
-      else
-        AssertThrow(false,
-                    ExcMessage(
-                    "The phase-field geometric function has not been implemented!"));
+      // For non-AT2 models, the strain energy threshold depends on the
+      // temperature-depedent critical energy release. So, we evaluate the
+      // energy threshold seperately inside the update_material_data()
+      // Here, the m_history_max_positive_strain_energy only represents the
+      // maximum positive strain energy and does not include the threshold value
+      m_history_max_positive_strain_energy = 0.0;
 
       m_coupling_on_heat_eq = coupling_on_heat_eq;
       m_degrade_conductivity = degrade_conductivity;
@@ -1353,6 +1362,11 @@ namespace PhaseField_T_and_u_and_d
     double get_tensile_strenght() const
     {
       return m_material->get_tensile_strength();
+    }
+
+    double get_history_energy_threshold() const
+    {
+      return m_material->get_history_energy_threshold();
     }
 
   private:
@@ -4557,6 +4571,9 @@ namespace PhaseField_T_and_u_and_d
           lqph[q_point]->get_history_max_positive_strain_energy();
       const double current_positive_strain_energy =
           lqph[q_point]->get_current_positive_strain_energy();
+      // the strain energy threshold
+      const double history_energy_threshold =
+          lqph[q_point]->get_history_energy_threshold();
 
       const double p = lqph[q_point]->get_p();
       const double a1 = lqph[q_point]->get_a1();
@@ -4566,6 +4583,8 @@ namespace PhaseField_T_and_u_and_d
       double history_value = history_strain_energy;
       if (current_positive_strain_energy > history_strain_energy)
         history_value = current_positive_strain_energy;
+      if (history_energy_threshold > history_value)
+        history_value = history_energy_threshold;
 
       const double phasefield_value = lqph[q_point]->get_phase_field_value();
       const Tensor<1, dim> phasefield_grad =
@@ -4662,6 +4681,9 @@ namespace PhaseField_T_and_u_and_d
           lqph[q_point]->get_history_max_positive_strain_energy();
       const double current_positive_strain_energy =
           lqph[q_point]->get_current_positive_strain_energy();
+      // the strain energy threshold
+      const double history_energy_threshold =
+          lqph[q_point]->get_history_energy_threshold();
 
       const double p = lqph[q_point]->get_p();
       const double a1 = lqph[q_point]->get_a1();
@@ -4671,6 +4693,8 @@ namespace PhaseField_T_and_u_and_d
       double history_value = history_strain_energy;
       if (current_positive_strain_energy > history_strain_energy)
         history_value = current_positive_strain_energy;
+      if (history_energy_threshold > history_value)
+        history_value = history_energy_threshold;
 
       const double phasefield_value = lqph[q_point]->get_phase_field_value();
       const Tensor<1, dim> phasefield_grad =
