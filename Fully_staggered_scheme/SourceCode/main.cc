@@ -1338,11 +1338,6 @@ namespace PhaseField_T_and_u_and_d
       return m_material->get_heat_capacity();
     }
 
-    double get_tensile_strength() const
-    {
-      return m_material->get_tensile_strength();
-    }
-
     bool get_heat_coupling_flag() const { return m_coupling_on_heat_eq; }
 
     bool get_degrade_conductivity_flag() const
